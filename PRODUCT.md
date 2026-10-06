@@ -6,9 +6,19 @@ Turn a personal story, CV, couple journey or memory into a polished comic. The p
 
 **V1 success test:** Can someone tell us a meaningful story, see themselves in the preview, and feel that the finished comic is worth paying for?
 
-## Current status (v2 — built)
+## Current status (v3 — building the new flow step by step)
 
-1. User types their story (with example starters, up to 8,000 characters) and picks one of 9 styles, each shown with a sample picture.
+New flow: **Your story (voice) → Style → Characters → Storyboard → Your comic.** Steps marked ✅ are built.
+
+- ✅ **Your story — voice interview** (`/create`). Tap the mic and talk (or type). Claude (`src/lib/engines/interview.ts`) reacts and asks one follow-up question at a time (usually 4–7), read aloud by OpenAI text-to-speech (`gpt-4o-mini-tts`); answers are transcribed with `gpt-transcribe` (`src/lib/engines/voice.ts`). When it has enough (or the user says so) Claude writes the story up with a cast list; the user edits it and **locks** it. English only for now. Progress survives a page refresh.
+- ✅ **Style** — pick one of 9 styles, each shown with a sample picture.
+- ⏳ **Characters** — upload photos or ask AI to design each character; approval loop (AI may ask for more photos). Not built yet.
+- ⏳ **Storyboard** — editable wireframe pages: panel layouts, stick figures, add/remove panels and dialogue, before any expensive art. Not built yet.
+- ✅ **Your comic** — as below.
+
+How the comic itself is made:
+
+1. The locked story (plus the interview transcript and cast, saved for the next steps) goes to the Story Engine.
 2. **Story Engine** (Claude, `claude-opus-5-5`), in two passes, running in the background while the page shows progress:
    - *Writer:* story bible (logline, tone, arc, how each person talks) → chooses the length (typically 6–10 pages, max 12 pages / 40 panels) → plans each page with a real comic layout → writes each panel (shot, scene, caption, balloons).
    - *Editor:* rereads it as a first-time reader and sharpens captions and dialogue for context and specificity.

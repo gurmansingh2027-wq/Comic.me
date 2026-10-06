@@ -1,5 +1,6 @@
 // Shared shape of a comic. Safe to import from both server and browser code.
 
+import type { InterviewTurn } from "./interview";
 import type { LayoutId } from "./layouts";
 
 export const MIN_STORY_LENGTH = 30;
@@ -52,6 +53,12 @@ export type ComicScript = {
   pages: Page[];
 };
 
+/** What we learned in the story interview, kept for the character and storyboard steps. */
+export type Intake = {
+  turns: InterviewTurn[];
+  characters: { name: string; role: string; look: string }[];
+};
+
 export type ComicStatus = "writing" | "polishing" | "ready" | "failed";
 
 export type Comic = {
@@ -60,6 +67,7 @@ export type Comic = {
   updatedAt: string;
   styleId: string;
   story: string;
+  intake?: Intake;
   status: ComicStatus;
   error?: string;
   script?: ComicScript;

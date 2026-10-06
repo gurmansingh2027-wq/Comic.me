@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, type Comic } from "@/lib/comic";
+import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, type Comic, type Intake } from "@/lib/comic";
+import { isValidTranscript } from "@/lib/interview";
 import { errorResponse, UserFacingError } from "@/lib/errors";
 import { runWriting } from "@/lib/pipeline";
 import { saveComic } from "@/lib/storage";
@@ -12,7 +13,7 @@ export const maxDuration = 800;
 /** Starts a new comic: saves the story, then writes the script in the background. Returns the comic's id right away. */
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown; intake?: Intake };
     const story = typeof body.story === "string" ? body.story.trim() : "";
     const style = typeof body.styleId === "string" ? getStyle(body.styleId) : undefined;
 
@@ -27,7 +28,19 @@ export async function POST(request: Request) {
     }
 
     const now = new Date().toISOString();
-    const comic: Comic = { id: randomUUID(), createdAt: now, updatedAt: now, styleId: style.id, story, status: "writing" };
+    const intake =
+      body.intake && isValidTranscript(body.intake.turns) && Array.isArray(body.intake.characters)
+        ? { turns: body.intake.turns, characters: body.intake.characters.slice(0, 20) }
+        : undefined;
+    const comic: Comic = {
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      styleId: style.id,
+      story,
+      intake,
+      status: "writing",
+    };
     await saveComic(comic);
     after(() => runWriting(comic.id));
 

@@ -1,17 +1,14 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { MAX_PAGES, MAX_PANELS, type ComicScript, type Page } from "../comic";
-import { requireEnv, UserFacingError } from "../errors";
+import { askClaude } from "../claude";
+import { UserFacingError } from "../errors";
 import { fitLayout, LAYOUT_IDS, layoutMenu } from "../layouts";
 import type { ComicStyle } from "../styles";
 
 // Story Engine: turns the user's story into a multi-page comic script using Claude, in two passes:
 //   1. The writer builds a story bible, then plans pages and writes every panel.
 //   2. The editor rereads it as a first-time reader and sharpens captions and dialogue.
-
-const MODEL = "claude-opus-5-5";
 
 const DialogueSchema = z.object({
   speaker: z.string().describe("Character name, exactly as in the character list"),
@@ -122,47 +119,14 @@ Rules:
 - Each balloon's speaker must be someone in that panel's scene, and keep each speaker's side.
 - You may also polish the title and tagline.`;
 
-function client() {
-  return new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
-}
-
-async function callClaude<S extends z.ZodType>(
-  system: string,
-  user: string,
-  schema: S,
-  effort: "medium" | "high",
-): Promise<z.infer<S>> {
-  const stream = client().beta.messages.stream({
-    model: MODEL,
-    max_tokens: 64000,
-    // If Claude's safety filters decline, the API retries on a fallback model automatically.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: { effort, format: betaZodOutputFormat(schema) },
-    system,
-    messages: [{ role: "user", content: user }],
-  });
-  const response = await stream.finalMessage();
-
-  if (response.stop_reason === "refusal") {
-    throw new UserFacingError(
-      "Our story writer couldn't turn this story into a comic. Try rewording it or leaving out sensitive details.",
-    );
-  }
-  if (response.stop_reason === "max_tokens" || !response.parsed_output) {
-    throw new UserFacingError("The comic script came back incomplete. Please try again.", 502);
-  }
-  return response.parsed_output as z.infer<S>;
-}
-
 /** Pass 1: the writer. */
 export async function writeScript(story: string, style: ComicStyle): Promise<ComicScript> {
-  const draft = await callClaude(
-    WRITER_PROMPT,
-    `Art style: ${style.label} — ${style.blurb}. Storytelling sensibility: ${style.storytelling}\n\n<story>\n${story}\n</story>`,
-    ScriptSchema,
-    "high",
-  );
+  const draft = await askClaude({
+    system: WRITER_PROMPT,
+    user: `Art style: ${style.label} — ${style.blurb}. Storytelling sensibility: ${style.storytelling}\n\n<story>\n${story}\n</story>`,
+    schema: ScriptSchema,
+    effort: "high",
+  });
 
   const pages: Page[] = draft.pages
     .filter((page) => page.panels.length > 0)
@@ -187,12 +151,12 @@ export async function writeScript(story: string, style: ComicStyle): Promise<Com
 
 /** Pass 2: the editor. Only captions, balloons, title and tagline change; the art plan stays the same. */
 export async function polishScript(story: string, script: ComicScript): Promise<ComicScript> {
-  const edit = await callClaude(
-    EDITOR_PROMPT,
-    `<original_story>\n${story}\n</original_story>\n\n<script>\n${JSON.stringify(script, null, 1)}\n</script>`,
-    EditSchema,
-    "medium",
-  );
+  const edit = await askClaude({
+    system: EDITOR_PROMPT,
+    user: `<original_story>\n${story}\n</original_story>\n\n<script>\n${JSON.stringify(script, null, 1)}\n</script>`,
+    schema: EditSchema,
+    effort: "medium",
+  });
 
   return {
     ...script,

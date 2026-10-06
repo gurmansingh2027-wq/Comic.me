@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
+import Stepper from "@/components/Stepper";
 import { imageKeys } from "@/lib/comic";
 import { isStale } from "@/lib/pipeline";
 import { hasImage, loadComic } from "@/lib/storage";
@@ -21,13 +22,16 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
   const drawn = await Promise.all(keys.map((key) => hasImage(id, key)));
 
   return (
-    <ComicViewer
-      comicId={comic.id}
-      styleId={comic.styleId}
-      initialStatus={stale ? "failed" : comic.status}
-      initialError={stale ? "Writing was interrupted. Please try again." : comic.error}
-      initialScript={ready ? comic.script : undefined}
-      alreadyDrawn={keys.filter((_, i) => drawn[i])}
-    />
+    <div className="space-y-8">
+      <Stepper current="Your comic" />
+      <ComicViewer
+        comicId={comic.id}
+        styleId={comic.styleId}
+        initialStatus={stale ? "failed" : comic.status}
+        initialError={stale ? "Writing was interrupted. Please try again." : comic.error}
+        initialScript={ready ? comic.script : undefined}
+        alreadyDrawn={keys.filter((_, i) => drawn[i])}
+      />
+    </div>
   );
 }
