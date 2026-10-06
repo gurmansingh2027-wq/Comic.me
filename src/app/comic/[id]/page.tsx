@@ -1,11 +1,13 @@
 import { notFound } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
-import { hasPanelImage, loadComic } from "@/lib/storage";
+import { imageKeys } from "@/lib/comic";
+import { isStale } from "@/lib/pipeline";
+import { hasImage, loadComic } from "@/lib/storage";
 
 export async function generateMetadata(props: PageProps<"/comic/[id]">) {
   const { id } = await props.params;
   const comic = await loadComic(id);
-  return { title: comic ? `${comic.script.title} — Comic.me` : "Comic not found — Comic.me" };
+  return { title: comic?.script ? `${comic.script.title} — Comic.me` : "Your comic — Comic.me" };
 }
 
 export default async function ComicPage(props: PageProps<"/comic/[id]">) {
@@ -13,7 +15,19 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
   const comic = await loadComic(id);
   if (!comic) notFound();
 
-  const initiallyReady = await Promise.all(comic.script.panels.map((_, i) => hasPanelImage(id, i + 1)));
+  const stale = isStale(comic);
+  const ready = comic.status === "ready" && comic.script;
+  const keys = ready ? imageKeys(comic.script!) : [];
+  const drawn = await Promise.all(keys.map((key) => hasImage(id, key)));
 
-  return <ComicViewer comicId={comic.id} script={comic.script} initiallyReady={initiallyReady} />;
+  return (
+    <ComicViewer
+      comicId={comic.id}
+      styleId={comic.styleId}
+      initialStatus={stale ? "failed" : comic.status}
+      initialError={stale ? "Writing was interrupted. Please try again." : comic.error}
+      initialScript={ready ? comic.script : undefined}
+      alreadyDrawn={keys.filter((_, i) => drawn[i])}
+    />
+  );
 }

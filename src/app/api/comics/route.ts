@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, type Comic } from "@/lib/comic";
-import { generateScript } from "@/lib/engines/story";
 import { errorResponse, UserFacingError } from "@/lib/errors";
+import { runWriting } from "@/lib/pipeline";
 import { saveComic } from "@/lib/storage";
 import { getStyle } from "@/lib/styles";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 800;
 
-/** Step 1 of making a comic: write the script with Claude and save it. Returns the new comic's id. */
+/** Starts a new comic: saves the story, then writes the script in the background. Returns the comic's id right away. */
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown };
@@ -25,15 +26,10 @@ export async function POST(request: Request) {
       throw new UserFacingError("Please pick a comic style.");
     }
 
-    const script = await generateScript(story, style);
-    const comic: Comic = {
-      id: randomUUID(),
-      createdAt: new Date().toISOString(),
-      styleId: style.id,
-      story,
-      script,
-    };
+    const now = new Date().toISOString();
+    const comic: Comic = { id: randomUUID(), createdAt: now, updatedAt: now, styleId: style.id, story, status: "writing" };
     await saveComic(comic);
+    after(() => runWriting(comic.id));
 
     return Response.json({ id: comic.id });
   } catch (error) {

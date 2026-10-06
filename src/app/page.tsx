@@ -9,7 +9,7 @@ export default function Home() {
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-lg">
           Tell us about your life, your love story, your career — anything. Pick a style, and we&apos;ll write
-          and draw it as a 6-panel comic you can download and share.
+          and draw it as a real comic book, with a cover and full pages, ready to download and print.
         </p>
       </section>
       <StoryForm />

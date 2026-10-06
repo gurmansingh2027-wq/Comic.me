@@ -1,6 +1,6 @@
 # Comic.me
 
-Type your story, pick a comic style, and get a 6-panel comic you can download.
+Type your story, pick a comic style, and get a real comic book (cover + pages) you can download as a PDF and print.
 See [PRODUCT.md](PRODUCT.md) for the product vision and roadmap.
 
 ## Run it on your computer
@@ -24,9 +24,12 @@ After changing `.env.local`, stop and start the app again.
 
 | Step | Where |
 | --- | --- |
-| Story form | `src/app/page.tsx`, `src/components/StoryForm.tsx` |
-| Claude writes the script | `src/lib/engines/story.ts` → `POST /api/comics` |
-| OpenAI draws each panel | `src/lib/engines/art.ts` → `POST /api/comics/[id]/panels/[n]` |
-| Bubbles, captions, download | `src/lib/engines/render.ts`, `src/components/ComicViewer.tsx` |
-| Comic styles | `src/lib/styles.ts` |
+| Story form + style picker | `src/app/page.tsx`, `src/components/StoryForm.tsx` |
+| Comic styles (art direction + lettering) | `src/lib/styles.ts`, samples in `public/styles/` |
+| Claude writes, then edits, the script (in the background) | `src/lib/engines/story.ts`, `src/lib/pipeline.ts` → `POST /api/comics` |
+| Page layouts | `src/lib/layouts.ts` |
+| OpenAI draws the cover and each panel | `src/lib/engines/art.ts` → `POST /api/comics/[id]/images/[key]` |
+| Lettering, pages, PDF download | `src/lib/engines/render.ts`, `src/components/ComicViewer.tsx` |
 | Saved comics | `storage/comics/<id>/` (local only, not in git) |
+
+Redraw the style sample pictures: `node scripts/make-style-samples.ts --force`

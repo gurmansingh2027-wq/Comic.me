@@ -6,17 +6,20 @@ Turn a personal story, CV, couple journey or memory into a polished comic. The p
 
 **V1 success test:** Can someone tell us a meaningful story, see themselves in the preview, and feel that the finished comic is worth paying for?
 
-## Current status (v1 — built)
+## Current status (v2 — built)
 
-The smallest end-to-end version of the flow:
+1. User types their story (with example starters, up to 8,000 characters) and picks one of 9 styles, each shown with a sample picture.
+2. **Story Engine** (Claude, `claude-opus-5-5`), in two passes, running in the background while the page shows progress:
+   - *Writer:* story bible (logline, tone, arc, how each person talks) → chooses the length (typically 6–10 pages, max 12 pages / 40 panels) → plans each page with a real comic layout → writes each panel (shot, scene, caption, balloons).
+   - *Editor:* rereads it as a first-time reader and sharpens captions and dialogue for context and specificity.
+3. **Page layouts** (`src/lib/layouts.ts`): 12 comic-book layouts from a full-page splash to 6-panel grids; big panels for big moments.
+4. **Art Engine** (OpenAI `gpt-image-2`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. Paced for OpenAI's images-per-minute limit with automatic retries.
+5. **Render Engine** (browser canvas) letters every page: caption boxes and speech / shout / whisper / thought balloons in reading order, per-style lettering (fonts, caption colours, page colour). Downloads as a print-ready PDF (2:3 pages) or per-page PNG.
+6. Comics are saved on local disk under `storage/comics/<id>/` and viewed at `/comic/<id>`.
 
-1. User types their story (with example starters) and picks one of 6 styles.
-2. **Story Engine** (Claude, `claude-opus-5-5`) writes a 6-panel script: title, character sheet, and per panel a scene description, narrator caption and up to 2 speech bubbles.
-3. **Art Engine** (OpenAI `gpt-image-2`) draws each panel in parallel — art only, no text.
-4. **Render Engine** (browser canvas) adds our own captions and speech bubbles on top, and builds a downloadable PNG page.
-5. Comics are saved on local disk under `storage/comics/<id>/` and viewed at `/comic/<id>`.
+Cost per comic (Oct 2026 prices, medium image quality): roughly $2–3 for a 10-page comic (~40 images at ~$0.05, plus ~$0.50 of Claude).
 
-No login, payments, gallery, uploads, storyboard editing or photo references yet.
+Not yet built: login, payments, gallery, file/CV upload, chat intake, storyboard editing before drawing, photo references for characters, preview/paywall, social exports.
 
 ## Eventual product flow
 
@@ -34,10 +37,10 @@ No login, payments, gallery, uploads, storyboard editing or photo references yet
 | Engine | Job | v1 implementation |
 | --- | --- | --- |
 | Story Engine | Conversation/file → structured story | `src/lib/engines/story.ts` (Claude) |
-| Storyboard Engine | Story → pages, panels, scenes, dialogue | Part of the story engine for now |
+| Storyboard Engine | Story → pages, panels, scenes, dialogue | Writer + editor passes in `story.ts`, layouts in `layouts.ts` |
 | Character Engine | Photos → consistent character references | Text character sheet repeated in every panel prompt |
 | Art Engine | Panel instructions → comic illustrations | `src/lib/engines/art.ts` (OpenAI) |
-| Render Engine | Art + typography + bubbles → final comic & social formats | `src/lib/engines/render.ts` (canvas) |
+| Render Engine | Art + typography + bubbles → final comic & social formats | `src/lib/engines/render.ts` (canvas → PDF/PNG) |
 
 ## Build order
 
