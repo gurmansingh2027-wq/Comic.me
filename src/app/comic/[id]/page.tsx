@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
 import Stepper from "@/components/Stepper";
 import { imageKeys } from "@/lib/comic";
@@ -15,6 +15,7 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
   const { id } = await props.params;
   const comic = await loadComic(id);
   if (!comic) notFound();
+  if (comic.status === "draft") redirect(`/comic/${id}/characters`);
 
   const stale = isStale(comic);
   const ready = comic.status === "ready" && comic.script;

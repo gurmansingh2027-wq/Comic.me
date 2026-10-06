@@ -1,6 +1,6 @@
 # Comic.me
 
-Type your story, pick a comic style, and get a real comic book (cover + pages) you can download as a PDF and print.
+Tell your story out loud, pick a comic style, set up your characters from photos or AI designs, and get a real comic book (cover + pages) you can download as a PDF and print.
 See [PRODUCT.md](PRODUCT.md) for the product vision and roadmap.
 
 ## Run it on your computer
@@ -24,9 +24,10 @@ After changing `.env.local`, stop and start the app again.
 
 | Step | Where |
 | --- | --- |
-| Story form + style picker | `src/app/page.tsx`, `src/components/StoryForm.tsx` |
+| Voice story interview + style picker | `src/app/create/page.tsx`, `src/components/StoryStudio.tsx`, `src/lib/engines/interview.ts`, `src/lib/engines/voice.ts` |
+| Characters: cast, photos, designs, approval | `src/app/comic/[id]/characters/page.tsx`, `src/components/CharacterStudio.tsx`, `src/lib/cast-service.ts`, `src/lib/engines/characters.ts` |
 | Comic styles (art direction + lettering) | `src/lib/styles.ts`, samples in `public/styles/` |
-| Claude writes, then edits, the script (in the background) | `src/lib/engines/story.ts`, `src/lib/pipeline.ts` → `POST /api/comics` |
+| Claude writes, then edits, the script (in the background) | `src/lib/engines/story.ts`, `src/lib/pipeline.ts` → `POST /api/comics/[id]` |
 | Page layouts | `src/lib/layouts.ts` |
 | OpenAI draws the cover and each panel | `src/lib/engines/art.ts` → `POST /api/comics/[id]/images/[key]` |
 | Lettering, pages, PDF download | `src/lib/engines/render.ts`, `src/components/ComicViewer.tsx` |

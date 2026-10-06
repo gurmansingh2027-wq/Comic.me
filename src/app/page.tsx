@@ -5,7 +5,7 @@ import { COMIC_STYLES, styleSampleUrl } from "@/lib/styles";
 const HOW_IT_WORKS = [
   { emoji: "🎙️", title: "Tell us your story", text: "Just talk. Our storyteller listens and asks a few questions." },
   { emoji: "🎨", title: "Pick a style", text: "Superhero, manga, watercolour, desi classic and more." },
-  { emoji: "🧑‍🎨", title: "Meet your characters", text: "Upload photos or let AI design them. Coming soon." },
+  { emoji: "🧑‍🎨", title: "Meet your characters", text: "Upload photos or let AI design them, then approve each look." },
   { emoji: "📖", title: "Get your comic book", text: "A cover and full pages, ready to download and print." },
 ];
 

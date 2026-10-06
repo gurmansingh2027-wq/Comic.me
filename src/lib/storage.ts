@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { IMAGE_KEY_PATTERN, type Comic, type ComicScript } from "./comic";
@@ -8,6 +9,21 @@ import { IMAGE_KEY_PATTERN, type Comic, type ComicScript } from "./comic";
 
 const ROOT = path.join(process.cwd(), "storage", "comics");
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// Shared across route bundles and development reloads in this local Node server.
+const shared = globalThis as typeof globalThis & { comicLocks?: Map<string, Promise<unknown>> };
+const locks = (shared.comicLocks ??= new Map());
+
+/** Serializes read/modify/write operations for one comic. */
+export function withComicLock<T>(id: string, task: () => Promise<T>): Promise<T> {
+  const previous = locks.get(id) ?? Promise.resolve();
+  const next = previous.catch(() => {}).then(task);
+  locks.set(id, next);
+  void next.finally(() => {
+    if (locks.get(id) === next) locks.delete(id);
+  }).catch(() => {});
+  return next;
+}
 
 export function isValidComicId(id: string): boolean {
   return ID_PATTERN.test(id);
@@ -31,7 +47,9 @@ export async function saveComic(comic: Comic): Promise<void> {
   const dir = comicDir(comic.id);
   await mkdir(dir, { recursive: true });
   comic.updatedAt = new Date().toISOString();
-  await writeFile(path.join(dir, "comic.json"), JSON.stringify(comic, null, 2));
+  const temporary = path.join(dir, `comic-${randomUUID()}.tmp`);
+  await writeFile(temporary, JSON.stringify(comic, null, 2));
+  await rename(temporary, path.join(dir, "comic.json"));
 }
 
 export async function loadComic(id: string): Promise<Comic | null> {
@@ -46,6 +64,32 @@ export async function loadComic(id: string): Promise<Comic | null> {
     return upgradeLegacyComic(data as LegacyComic);
   }
   return data;
+}
+
+// --- Character photos and designs (storage/comics/<id>/cast/<file>) -----------------------------
+
+const CAST_FILE_PATTERN = /^[a-z0-9-]{1,80}\.(jpg|webp)$/;
+
+export function isValidCastFile(file: string): boolean {
+  return CAST_FILE_PATTERN.test(file);
+}
+
+export function castFilePath(id: string, file: string): string {
+  if (!isValidCastFile(file)) throw new Error(`Invalid file name: ${file}`);
+  return path.join(comicDir(id), "cast", file);
+}
+
+export async function saveCastFile(id: string, file: string, data: Buffer): Promise<void> {
+  await mkdir(path.join(comicDir(id), "cast"), { recursive: true });
+  await writeFile(castFilePath(id, file), data);
+}
+
+export async function loadCastFile(id: string, file: string): Promise<Buffer | null> {
+  try {
+    return await readFile(castFilePath(id, file));
+  } catch {
+    return null;
+  }
 }
 
 export async function saveImage(id: string, key: string, image: Buffer): Promise<void> {

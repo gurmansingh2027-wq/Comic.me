@@ -12,24 +12,24 @@ New flow: **Your story (voice) → Style → Characters → Storyboard → Your 
 
 - ✅ **Your story — voice interview** (`/create`). Tap the mic and talk (or type). Claude (`src/lib/engines/interview.ts`) reacts and asks one follow-up question at a time (usually 4–7), read aloud by OpenAI text-to-speech (`gpt-4o-mini-tts`); answers are transcribed with `gpt-transcribe` (`src/lib/engines/voice.ts`). When it has enough (or the user says so) Claude writes the story up with a cast list; the user edits it and **locks** it. English only for now. Progress survives a page refresh.
 - ✅ **Style** — pick one of 9 styles, each shown with a sample picture.
-- ⏳ **Characters** — upload photos or ask AI to design each character; approval loop (AI may ask for more photos). Not built yet.
+- ✅ **Characters** (`/comic/<id>/characters`). Claude reads the locked story and lists the cast, marking each person main, supporting or minor (`src/lib/engines/characters.ts`). For each main/supporting character the user either uploads 1–4 photos or lets AI suggest a look. Claude checks the photos (good / needs another photo / unusable, with a friendly explanation). OpenAI draws a character design sheet (full body + portrait) in the chosen style, from the photos when given. The user approves it or asks for changes (up to 6 designs per character). On approval Claude writes a precise description of the design. Minor characters are drawn from their text description. Users can edit, add or remove characters. Business logic lives in `src/lib/cast-service.ts`.
 - ⏳ **Storyboard** — editable wireframe pages: panel layouts, stick figures, add/remove panels and dialogue, before any expensive art. Not built yet.
 - ✅ **Your comic** — as below.
 
 How the comic itself is made:
 
-1. The locked story (plus the interview transcript and cast, saved for the next steps) goes to the Story Engine.
+1. The locked story, the interview transcript and the approved cast go to the Story Engine. The writer must use the cast's exact names and looks.
 2. **Story Engine** (Claude, `claude-opus-5-5`), in two passes, running in the background while the page shows progress:
    - *Writer:* story bible (logline, tone, arc, how each person talks) → chooses the length (typically 6–10 pages, max 12 pages / 40 panels) → plans each page with a real comic layout → writes each panel (shot, scene, caption, balloons).
    - *Editor:* rereads it as a first-time reader and sharpens captions and dialogue for context and specificity.
 3. **Page layouts** (`src/lib/layouts.ts`): 12 comic-book layouts from a full-page splash to 6-panel grids; big panels for big moments.
-4. **Art Engine** (OpenAI `gpt-image-2`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. Paced for OpenAI's images-per-minute limit with automatic retries.
+4. **Art Engine** (OpenAI `gpt-image-2`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. For every panel, the approved design sheets of the characters in that scene (up to 4) are sent as reference pictures, so faces and outfits stay consistent. Paced for OpenAI's images-per-minute limit with automatic retries.
 5. **Render Engine** (browser canvas) letters every page: caption boxes and speech / shout / whisper / thought balloons in reading order, per-style lettering (fonts, caption colours, page colour). Downloads as a print-ready PDF (2:3 pages) or per-page PNG.
 6. Comics are saved on local disk under `storage/comics/<id>/` and viewed at `/comic/<id>`.
 
 Cost per comic (Oct 2026 prices, medium image quality): roughly $2–3 for a 10-page comic (~40 images at ~$0.05, plus ~$0.50 of Claude).
 
-Not yet built: login, payments, gallery, file/CV upload, chat intake, storyboard editing before drawing, photo references for characters, preview/paywall, social exports.
+Not yet built: login, payments, gallery, file/CV upload, storyboard editing before drawing, preview/paywall, social exports.
 
 ## Eventual product flow
 
@@ -48,7 +48,7 @@ Not yet built: login, payments, gallery, file/CV upload, chat intake, storyboard
 | --- | --- | --- |
 | Story Engine | Conversation/file → structured story | `src/lib/engines/story.ts` (Claude) |
 | Storyboard Engine | Story → pages, panels, scenes, dialogue | Writer + editor passes in `story.ts`, layouts in `layouts.ts` |
-| Character Engine | Photos → consistent character references | Text character sheet repeated in every panel prompt |
+| Character Engine | Photos → consistent character references | `src/lib/engines/characters.ts` + `src/lib/cast-service.ts`: cast planning, photo check, design sheets, approval |
 | Art Engine | Panel instructions → comic illustrations | `src/lib/engines/art.ts` (OpenAI) |
 | Render Engine | Art + typography + bubbles → final comic & social formats | `src/lib/engines/render.ts` (canvas → PDF/PNG) |
 

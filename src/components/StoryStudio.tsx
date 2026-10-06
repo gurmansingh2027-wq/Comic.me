@@ -148,7 +148,7 @@ export default function StoryStudio() {
         intake: { turns: state.turns, characters: state.composed.characters },
       });
       localStorage.removeItem(STORAGE_KEY);
-      router.push(`/comic/${id}`);
+      router.push(`/comic/${id}/characters`);
     } catch (err) {
       setError((err as Error).message);
       setBusy(null);
@@ -349,7 +349,7 @@ export default function StoryStudio() {
               disabled={busy === "submitting"}
               className="comic-box bg-zap px-10 py-4 font-title text-3xl tracking-wide text-white transition hover:-translate-y-0.5 disabled:opacity-50"
             >
-              {busy === "submitting" ? "Starting…" : "Make my comic!"}
+              {busy === "submitting" ? "Saving your story…" : "Meet my characters →"}
             </button>
           </div>
         </section>

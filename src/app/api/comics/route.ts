@@ -1,16 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { after } from "next/server";
 import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, type Comic, type Intake } from "@/lib/comic";
 import { isValidTranscript } from "@/lib/interview";
 import { errorResponse, UserFacingError } from "@/lib/errors";
-import { runWriting } from "@/lib/pipeline";
 import { saveComic } from "@/lib/storage";
 import { getStyle } from "@/lib/styles";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
 
-/** Starts a new comic: saves the story, then writes the script in the background. Returns the comic's id right away. */
+/** Saves the locked story and style as a draft for the Characters step. */
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown; intake?: Intake };
@@ -30,7 +28,7 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     const intake =
       body.intake && isValidTranscript(body.intake.turns) && Array.isArray(body.intake.characters)
-        ? { turns: body.intake.turns, characters: body.intake.characters.slice(0, 20) }
+        ? { turns: body.intake.turns, characters: body.intake.characters.filter((c) => c && typeof c.name === "string" && typeof c.role === "string" && typeof c.look === "string").slice(0, 20) }
         : undefined;
     const comic: Comic = {
       id: randomUUID(),
@@ -39,10 +37,9 @@ export async function POST(request: Request) {
       styleId: style.id,
       story,
       intake,
-      status: "writing",
+      status: "draft",
     };
     await saveComic(comic);
-    after(() => runWriting(comic.id));
 
     return Response.json({ id: comic.id });
   } catch (error) {

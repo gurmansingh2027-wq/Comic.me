@@ -1,6 +1,6 @@
 import { coverJob, drawImage, panelJob } from "@/lib/engines/art";
 import { errorResponse, UserFacingError } from "@/lib/errors";
-import { hasImage, isValidImageKey, loadComic, loadImage, saveImage } from "@/lib/storage";
+import { castFilePath, hasImage, isValidImageKey, loadComic, loadImage, saveImage } from "@/lib/storage";
 import { getStyle } from "@/lib/styles";
 
 export const runtime = "nodejs";
@@ -21,15 +21,19 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/comics/[id
     }
     const style = getStyle(comic.styleId);
     if (!style) throw new UserFacingError("This comic's style no longer exists.", 500);
+    const castRefs = (comic.cast ?? []).filter((member) => member.design?.approved).map((member) => ({
+      name: member.name, description: member.description, importance: member.importance,
+      designPath: castFilePath(id, member.design!.file),
+    }));
 
     let job;
     if (key === "cover") {
       if (!script.cover) throw new UserFacingError("This comic has no cover.", 404);
-      job = coverJob(script, style);
+      job = coverJob(script, style, castRefs);
     } else {
       const [page, panel] = key.split("-").map((n) => Number(n) - 1);
       if (!script.pages[page]?.panels[panel]) throw new UserFacingError("We couldn't find that panel.", 404);
-      job = panelJob(script, page, panel, style);
+      job = panelJob(script, page, panel, style, castRefs);
     }
 
     if (!(await hasImage(id, key))) {

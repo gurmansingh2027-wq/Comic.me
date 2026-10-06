@@ -59,7 +59,51 @@ export type Intake = {
   characters: { name: string; role: string; look: string }[];
 };
 
-export type ComicStatus = "writing" | "polishing" | "ready" | "failed";
+export type Importance = "main" | "supporting" | "minor";
+export type CastSource = "photos" | "ai";
+export type PhotoVerdict = "good" | "need-more" | "unusable";
+
+/** A person in the comic, set up in the Characters step. */
+export type CastMember = {
+  id: string;
+  name: string;
+  role: string;
+  /** How they look; after a design is approved, this describes the approved design. */
+  description: string;
+  importance: Importance;
+  source: CastSource;
+  photos: string[];
+  photoCheck?: { verdict: PhotoVerdict; message: string };
+  /** Current design file and whether the user approved it. */
+  design?: { file: string; approved: boolean; needsRedraw?: boolean };
+  designAttempts: number;
+  /** Makes retrying a completed design request safe after a lost response. */
+  lastDesignRequestId?: string;
+};
+
+export const MAX_CAST_MEMBERS = 12;
+export const MAX_PHOTOS_PER_CHARACTER = 4;
+export const MAX_DESIGN_ATTEMPTS = 6;
+export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+export type CastActivity = { action: string; memberId?: string };
+export type CastState = {
+  cast: CastMember[] | null;
+  ready: boolean;
+  status: ComicStatus;
+  activity?: CastActivity;
+};
+
+/** Main and supporting characters need an approved design; minor ones are drawn from their description. */
+export function needsDesign(member: CastMember): boolean {
+  return member.importance !== "minor";
+}
+
+export function castReady(cast: CastMember[]): boolean {
+  return cast.filter(needsDesign).every((member) => member.design?.approved);
+}
+
+export type ComicStatus = "draft" | "writing" | "polishing" | "ready" | "failed";
 
 export type Comic = {
   id: string;
@@ -68,6 +112,7 @@ export type Comic = {
   styleId: string;
   story: string;
   intake?: Intake;
+  cast?: CastMember[];
   status: ComicStatus;
   error?: string;
   script?: ComicScript;
@@ -85,6 +130,10 @@ export function imageKeys(script: ComicScript): string[] {
     ...(script.cover ? ["cover"] : []),
     ...script.pages.flatMap((page, p) => page.panels.map((_, i) => panelKey(p, i))),
   ];
+}
+
+export function castFileUrl(comicId: string, file: string): string {
+  return `/api/comics/${comicId}/files/${file}`;
 }
 
 export function imageUrl(comicId: string, key: string): string {

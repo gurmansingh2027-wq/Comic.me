@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { MAX_PAGES, MAX_PANELS, type ComicScript, type Page } from "../comic";
+import { MAX_PAGES, MAX_PANELS, type CastMember, type ComicScript, type Page } from "../comic";
 import { askClaude } from "../claude";
 import { UserFacingError } from "../errors";
 import { fitLayout, LAYOUT_IDS, layoutMenu } from "../layouts";
@@ -120,10 +120,11 @@ Rules:
 - You may also polish the title and tagline.`;
 
 /** Pass 1: the writer. */
-export async function writeScript(story: string, style: ComicStyle): Promise<ComicScript> {
+export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[]): Promise<ComicScript> {
+  const castNotes = cast === undefined ? "" : `\n\n<finalized_cast>\n${JSON.stringify(cast.map(({ name, role, description, importance }) => ({ name, role, appearance: description, importance })))}\n</finalized_cast>\nUse this finalized cast as authoritative. Use their names exactly in the character list, cover scene, panel scenes and speakers (including parentheses or punctuation). Respect changed names and appearances; do not invent replacement appearances or bring back removed named characters. Additional unnamed background people may be described as minor roles. In every scene, explicitly name each cast member visible in frame.`;
   const draft = await askClaude({
     system: WRITER_PROMPT,
-    user: `Art style: ${style.label} — ${style.blurb}. Storytelling sensibility: ${style.storytelling}\n\n<story>\n${story}\n</story>`,
+    user: `Art style: ${style.label} — ${style.blurb}. Storytelling sensibility: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}`,
     schema: ScriptSchema,
     effort: "high",
   });
@@ -143,7 +144,10 @@ export async function writeScript(story: string, style: ComicStyle): Promise<Com
     title: draft.title,
     tagline: draft.tagline,
     bible: draft.bible,
-    characters: draft.characters,
+    characters: cast === undefined ? draft.characters : [
+      ...cast.map((member) => ({ name: member.name, appearance: member.description })),
+      ...draft.characters.filter((character) => !cast.some((member) => member.name.normalize("NFKC").toLowerCase() === character.name.normalize("NFKC").toLowerCase())),
+    ],
     cover: draft.cover,
     pages,
   };

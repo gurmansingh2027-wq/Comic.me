@@ -1,10 +1,16 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import type { BetaMessageParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type { z } from "zod";
 import { requireEnv, UserFacingError } from "./errors";
 
 const MODEL = "claude-opus-5-5";
+
+/** An image block for Claude, from a JPEG/WebP file's bytes. */
+export function imageBlock(data: Buffer, mediaType: "image/jpeg" | "image/webp") {
+  return { type: "image" as const, source: { type: "base64" as const, media_type: mediaType, data: data.toString("base64") } };
+}
 
 /** Asks Claude for a structured (schema-checked) answer. */
 export async function askClaude<S extends z.ZodType>({
@@ -15,7 +21,8 @@ export async function askClaude<S extends z.ZodType>({
   maxTokens = 64000,
 }: {
   system: string;
-  user: string;
+  /** Text, or content blocks (e.g. images followed by text). */
+  user: BetaMessageParam["content"];
   schema: S;
   effort: "low" | "medium" | "high";
   maxTokens?: number;

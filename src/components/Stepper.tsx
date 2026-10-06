@@ -2,14 +2,14 @@ export const STEPS = ["Your story", "Style", "Characters", "Storyboard", "Your c
 export type Step = (typeof STEPS)[number];
 
 /** Steps that aren't built yet; shown so people can see where the flow is going. */
-const COMING_SOON: Step[] = ["Characters", "Storyboard"];
+const COMING_SOON: Step[] = ["Storyboard"];
 
 export default function Stepper({ current }: { current: Step }) {
   const currentIndex = STEPS.indexOf(current);
   return (
     <ol className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-sm font-bold">
       {STEPS.map((step, i) => {
-        const done = i < currentIndex;
+        const done = i < currentIndex && !COMING_SOON.includes(step);
         const active = i === currentIndex;
         return (
           <li key={step} className="flex items-center gap-2">

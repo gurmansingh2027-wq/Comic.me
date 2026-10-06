@@ -1,6 +1,6 @@
 import { after } from "next/server";
-import { errorResponse, UserFacingError } from "@/lib/errors";
-import { isRunning, isStale, runWriting } from "@/lib/pipeline";
+import { errorResponse } from "@/lib/errors";
+import { isStale, prepareWriting, runWriting } from "@/lib/pipeline";
 import { loadComic } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -21,10 +21,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/comics/[id]
 export async function POST(_request: Request, ctx: RouteContext<"/api/comics/[id]">) {
   try {
     const { id } = await ctx.params;
-    const comic = await loadComic(id);
-    if (!comic) throw new UserFacingError("Comic not found.", 404);
-    if (comic.status === "ready") throw new UserFacingError("This comic is already written.", 409);
-    if (!isRunning(id)) after(() => runWriting(id));
+    if (await prepareWriting(id)) after(() => runWriting(id));
     return Response.json({ ok: true });
   } catch (error) {
     return errorResponse(error);
