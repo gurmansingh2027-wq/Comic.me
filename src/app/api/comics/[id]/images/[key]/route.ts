@@ -32,8 +32,16 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
     const style = getStyle(comic.styleId);
     if (!style) throw new UserFacingError("This comic's style no longer exists.", 500);
     const castRefs = (comic.cast ?? []).filter((member) => member.design?.approved).map((member) => ({
-      name: member.name, description: member.description, importance: member.importance,
+      name: member.name,
+      description: member.description,
+      importance: member.importance,
       designPath: castFilePath(id, member.design!.file),
+      stages: (member.stages ?? []).map((stage) => ({
+        id: stage.id,
+        label: stage.label,
+        look: stage.look,
+        designPath: stage.design?.approved ? castFilePath(id, stage.design.file) : undefined,
+      })),
     }));
 
     const exists = await hasImage(id, key);

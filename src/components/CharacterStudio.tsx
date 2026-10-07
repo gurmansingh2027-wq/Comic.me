@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { CastCommand } from "@/lib/cast-service";
-import { castFileUrl, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, needsDesign, type CastMember, type CastState } from "@/lib/comic";
+import { castFileUrl, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, MAX_STAGES_PER_CHARACTER, needsDesign, type CastMember, type CastState, type LifeStage } from "@/lib/comic";
 import { getStyle } from "@/lib/styles";
 import Countdown, { ESTIMATES } from "./Countdown";
 import Stepper from "./Stepper";
@@ -254,6 +254,7 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
       </p>}
 
       {(needsDesign(member) || member.design) && <div className="space-y-3 border-t-2 border-ink pt-4">
+        {member.mainStage && <p className="text-sm font-bold">Main look · {member.mainStage.label}</p>}
         {member.design && <>
           {/* eslint-disable-next-line @next/next/no-img-element -- generated private design sheet */}
           <img src={castFileUrl(comicId, member.design.file)} alt={`Character design for ${member.name}`} className={`aspect-[3/2] w-full rounded border-2 border-ink bg-paper object-contain ${member.design.needsRedraw ? "opacity-50" : ""}`} />
@@ -270,7 +271,9 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
         </>}
         {remaining > 0 && <button className={member.design ? button : `${button} bg-pop`} disabled={busy || dirty || (member.source === "photos" && (member.photos.length === 0 || member.photoCheck?.verdict === "unusable"))} onClick={() => design()}>{member.design ? "Draw a revised look" : member.source === "photos" ? "Design from my photos" : "✨ Design this character"}</button>}
         <p className="text-xs text-neutral-600">{remaining > 0 ? `${remaining} of ${MAX_DESIGN_ATTEMPTS} designs remaining. A design takes about ${ESTIMATES.characterDesign} seconds. Failed requests don't use an attempt.` : "All six designs used. You can still approve the current look."}</p>
+        {member.wardrobe && <p className="rounded bg-paper p-2 text-xs text-neutral-700">👕 Outfits change with each scene (school, work, wedding…); the design shows who {member.name} is. Typical wardrobe: {member.wardrobe}</p>}
       </div>}
+      {needsDesign(member) && <LifeStages member={member} comicId={comicId} busy={busy || dirty || !!working} act={act} />}
       {confirmRemove ? <div className="flex flex-wrap items-center gap-2 border-t-2 border-neutral-200 pt-3">
         <span className="text-sm">Remove {member.name} from the cast?</span>
         <button className={button} disabled={busy} onClick={async () => { if (await perform("Removing character…", 5, { action: "remove", memberId: member.id })) onDirty(member.id, false); }}>Remove</button>
@@ -302,4 +305,105 @@ function AddCharacter({ busy, act, onClose }: { busy: boolean; act: Action; onCl
       <button className={button} disabled={busy} onClick={onClose}>Cancel</button>
     </div>
   </section>;
+}
+
+/** The other ages a character appears at, each designed from the approved main look. */
+function LifeStages({ member, comicId, busy, act }: { member: CastMember; comicId: string; busy: boolean; act: Action }) {
+  const stages = member.stages ?? [];
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ label: "", ageRange: "", look: "" });
+  const mainApproved = !!member.design?.approved;
+  if (stages.length === 0 && !adding) {
+    return (
+      <button className="text-xs font-bold underline disabled:opacity-50" disabled={busy || stages.length >= MAX_STAGES_PER_CHARACTER} onClick={() => setAdding(true)}>
+        + Does {member.name} appear at another age (as a child, years later…)? Add an age
+      </button>
+    );
+  }
+  return (
+    <div className="space-y-3 border-t-2 border-ink pt-4">
+      <div>
+        <p className="font-title text-2xl tracking-wide">{member.name} at other ages</p>
+        <p className="text-xs text-neutral-600">
+          Your story shows {member.name} at different ages, so each one gets its own look, drawn from the approved main look so it&apos;s clearly the same person.
+        </p>
+      </div>
+      {!mainApproved && <p className="rounded bg-paper p-2 text-sm">Approve the main look first; then we&apos;ll draw these ages from it.</p>}
+      {stages.map((stage) => <StageCard key={`${stage.id}/${stage.look}/${stage.ageRange}`} member={member} stage={stage} comicId={comicId} busy={busy} mainApproved={mainApproved} act={act} />)}
+      {adding ? (
+        <div className="space-y-2 rounded border-2 border-ink bg-paper p-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Label, e.g. Child" className={input} maxLength={80} />
+            <input value={draft.ageRange} onChange={(e) => setDraft({ ...draft, ageRange: e.target.value })} placeholder="Age, e.g. 7-10" className={input} maxLength={40} />
+          </div>
+          <textarea value={draft.look} onChange={(e) => setDraft({ ...draft, look: e.target.value })} placeholder="How they look at this age (height, face, hair)" rows={2} className={input} maxLength={1500} />
+          <div className="flex gap-2">
+            <button className={button} disabled={busy || !draft.label.trim() || !draft.ageRange.trim() || !draft.look.trim()} onClick={async () => { if (await act({ action: "stage-add", memberId: member.id, stage: draft })) { setAdding(false); setDraft({ label: "", ageRange: "", look: "" }); } }}>Add this age</button>
+            <button className={button} disabled={busy} onClick={() => setAdding(false)}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        stages.length < MAX_STAGES_PER_CHARACTER && <button className="text-xs font-bold underline disabled:opacity-50" disabled={busy} onClick={() => setAdding(true)}>+ Add another age</button>
+      )}
+    </div>
+  );
+}
+
+function StageCard({ member, stage, comicId, busy, mainApproved, act }: { member: CastMember; stage: LifeStage; comicId: string; busy: boolean; mainApproved: boolean; act: Action }) {
+  const [look, setLook] = useState(stage.look);
+  const [feedback, setFeedback] = useState("");
+  const [working, setWorking] = useState<Working | null>(null);
+  const request = useRef<Extract<CastCommand, { action: "design" }> | null>(null);
+  const remaining = MAX_DESIGN_ATTEMPTS - stage.designAttempts;
+  const awaiting = !!stage.design && !stage.design.approved && !stage.design.needsRedraw;
+  const changed = look.trim() !== stage.look;
+
+  async function perform(label: string, seconds: number, command: CastCommand) {
+    setWorking({ label, startedAt: Date.now(), seconds });
+    const result = await act(command);
+    setWorking(null);
+    return result;
+  }
+  async function design() {
+    const note = feedback.trim();
+    if (!request.current || request.current.expectedDesign !== stage.design?.file || request.current.feedback !== note) {
+      request.current = { action: "design", memberId: member.id, stageId: stage.id, requestId: crypto.randomUUID(), expectedDesign: stage.design?.file, feedback: note };
+    }
+    if (await perform(`Drawing ${member.name} · ${stage.label}`, ESTIMATES.characterDesign, request.current)) {
+      request.current = null;
+      setFeedback("");
+    }
+  }
+
+  return (
+    <div className={`space-y-2 rounded border-2 bg-white p-3 ${awaiting ? "border-ink ring-4 ring-pop" : "border-neutral-300"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-bold">{stage.label} <span className="font-normal text-neutral-600">· age {stage.ageRange}</span></p>
+        <span className={`rounded-full border-2 px-2 py-0.5 text-xs font-bold ${stage.design?.approved ? "border-green-700 bg-green-50 text-green-800" : awaiting ? "border-ink bg-pop" : "border-ink bg-paper"}`}>
+          {stage.design?.approved ? "✓ Approved" : awaiting ? "Waiting for your approval" : "Design needed"}
+        </span>
+      </div>
+      <textarea value={look} onChange={(e) => setLook(e.target.value)} rows={2} maxLength={1500} disabled={busy} className={`${input} resize-y text-sm`} aria-label={`How ${member.name} looks at this age`} />
+      {changed && <button className={button} disabled={busy || !look.trim()} onClick={() => perform("Saving", 5, { action: "stage-update", memberId: member.id, stageId: stage.id, changes: { look: look.trim() } })}>Save</button>}
+      {stage.design && <>
+        {/* eslint-disable-next-line @next/next/no-img-element -- generated private design sheet */}
+        <img src={castFileUrl(comicId, stage.design.file)} alt={`${member.name} as ${stage.label}`} className={`aspect-[3/2] w-full rounded border-2 border-ink bg-paper object-contain ${stage.design.needsRedraw ? "opacity-50" : ""}`} />
+        {stage.design.needsRedraw && <p className="text-sm font-bold">The main look or details changed. Draw this age again to approve it.</p>}
+        {awaiting && (
+          <button className="comic-box w-full animate-pulse bg-zap px-4 py-2 font-title text-xl tracking-wide text-white hover:animate-none disabled:animate-none disabled:opacity-50" disabled={busy || !!working || changed} onClick={() => perform("Approving this look", ESTIMATES.approve, { action: "approve", memberId: member.id, stageId: stage.id, file: stage.design!.file })}>
+            ✓ Approve {member.name} · {stage.label}
+          </button>
+        )}
+        {remaining > 0 && <textarea value={feedback} onChange={(e) => setFeedback(e.target.value)} rows={1} maxLength={1500} placeholder="What should change? (optional)" disabled={busy} className={`${input} text-sm`} />}
+      </>}
+      <div className="flex flex-wrap items-center gap-2">
+        {remaining > 0 && <button className={stage.design ? button : `${button} bg-pop`} disabled={busy || !!working || !mainApproved || changed} onClick={design}>{stage.design ? "Draw a revised look" : `✨ Design ${member.name} · ${stage.label}`}</button>}
+        <button className="text-xs underline disabled:opacity-50" disabled={busy || !!working} onClick={() => act({ action: "stage-remove", memberId: member.id, stageId: stage.id })}>Remove this age</button>
+      </div>
+      {working && <p role="status" className="flex flex-wrap items-center gap-2 rounded border-2 border-ink bg-pop p-2 text-sm font-bold">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-ink border-t-white" />
+        {working.label}… <Countdown startedAt={working.startedAt} seconds={working.seconds} className="font-normal" />
+      </p>}
+    </div>
+  );
 }
