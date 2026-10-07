@@ -1,8 +1,17 @@
-// The comic styles a user can pick.
-// - `art` is the art direction sent to the image model for every panel, so the whole comic shares one look.
-// - `storytelling` guides the writer's pacing and tone for this tradition.
-// - `lettering` controls how our renderer draws captions, balloons and page gutters.
-// Styles are described by technique and tradition, never by copying a specific artist.
+// Comic.me style recipes.
+//
+// A style is not a filter: it changes how the story is DIRECTED (camera, pacing, exaggeration,
+// humour, cover concept) as well as how it is DRAWN (line, anatomy, colour, light, texture).
+// Each recipe below is plain data, so new styles can be added here without touching other code.
+//
+// - `render`     how pictures look; turned into the art direction for every image.
+// - `direction`  how the Comic Director stages the story in this style.
+// - `cover`      how covers in this style are composed.
+// - `avoid`      things to keep out of the pictures (a "negative prompt").
+// - `lettering`  how our renderer letters captions and balloons.
+// - `lora`       optional custom-trained style model (used once we move to FLUX-type models).
+//
+// Styles are described by technique and tradition, never by copying a specific artist or show.
 
 export type LetteringFont = "comic" | "hand" | "typewriter";
 
@@ -14,13 +23,40 @@ export type Lettering = {
   balloonFont: LetteringFont;
 };
 
-export type ComicStyle = {
+export type StyleRecipe = {
   id: string;
   label: string;
   blurb: string;
-  art: string;
-  storytelling: string;
+  /** Signature styles are shown first, larger. */
+  family: "signature" | "classic";
+  render: {
+    signature: string;
+    linework: string;
+    anatomy: string;
+    colour: string;
+    lightingAndShadow: string;
+    detailAndTexture: string;
+  };
+  direction: {
+    /** How this style interprets a story: what it exaggerates, what it plays for laughs or drama. */
+    interpretation: string;
+    camera: string;
+    pacing: string;
+    /** Rough number of panels per page this style likes (the director still varies it). */
+    panelDensity: "sparse" | "balanced" | "dense";
+  };
+  cover: string;
+  avoid: string[];
   lettering: Lettering;
+  lora?: { url: string; trigger: string; scale?: number };
+};
+
+/** A recipe plus the prompt text derived from it (what the rest of the app uses). */
+export type ComicStyle = StyleRecipe & {
+  /** Art direction sent with every image of this style. */
+  art: string;
+  /** Storytelling direction given to the Comic Director and cover art director. */
+  storytelling: string;
 };
 
 const classicLettering: Lettering = {
@@ -31,140 +67,316 @@ const classicLettering: Lettering = {
   balloonFont: "comic",
 };
 
-export const COMIC_STYLES: ComicStyle[] = [
+/** Kept out of every picture, whatever the style. */
+const ALWAYS_AVOID = [
+  "any text, letters, logos or watermarks",
+  "recognisable copyrighted characters, mascots or monsters from films, comics or games",
+  "extra or missing fingers, warped hands or faces",
+];
+
+const RECIPES: StyleRecipe[] = [
+  // --- Signature styles: radically different visual grammars --------------------------------
   {
-    id: "superhero",
-    label: "Superhero",
-    blurb: "Bold ink, big drama, heroic poses",
-    art: [
-      "Modern American superhero comic book art.",
-      "Confident, varied-weight black ink outlines with feathered hatching in the shadows;",
-      "dynamic foreshortening, low heroic camera angles and strong silhouettes;",
-      "saturated primary-leaning colours with crisp cel shading, rim lighting and subtle halftone dot texture;",
-      "anatomically grounded, expressive figures; everyday people drawn with the gravity of heroes.",
-    ].join(" "),
-    storytelling: "Treat ordinary milestones as epic feats. Punchy, confident lines; dramatic reveals at page ends.",
-    lettering: classicLettering,
+    id: "prestige",
+    label: "Prestige",
+    blurb: "Blockbuster superhero-comic polish",
+    family: "signature",
+    render: {
+      signature:
+        "Premium mainstream Western superhero comic book art at the very top of the industry: unmistakably an inked and digitally coloured comic panel (not a painting or photo), the quality of a flagship superhero series, original characters only.",
+      linework: "Bold black ink contour lines on every form, varied line weight, feathered hatching and big spot blacks in the shadows; crisp, professional inking.",
+      anatomy: "Superb, grounded anatomy with heroic proportions; expressive hands and faces; dynamic, weight-bearing poses with clear gesture lines.",
+      colour: "Rich, professional digital colouring: saturated but controlled palettes, smooth gradients, glowing highlights, atmospheric depth.",
+      lightingAndShadow: "Cinematic lighting: strong key light, rim lights, dramatic cast shadows, volumetric light shafts.",
+      detailAndTexture: "Richly detailed, believable environments; subtle grain and halftone texture in shadows; every panel polished like a splash page.",
+    },
+    direction: {
+      interpretation:
+        "Treat ordinary life as an epic. Find the heroic beat in every moment: a missed flight becomes a desperate sprint; a job offer becomes a turning point lit like a revelation.",
+      camera: "Extreme perspectives: low hero angles, high overheads, deep foreshortening, wide establishing shots with scale contrast, intense close-ups on eyes and hands.",
+      pacing: "Build with tight panels, then release into big panels and full-page splashes at climaxes. End pages on cliffhangers.",
+      panelDensity: "balanced",
+    },
+    cover: "Blockbuster cover: one iconic, larger-than-life focal figure or moment, dramatic perspective, epic scale, lens-flare lighting and a bold title space.",
+    avoid: ["soft painterly rendering without ink lines", "stiff or static poses", "flat lighting", "muddy colours", "plain empty backgrounds"],
+    lettering: { ...classicLettering, captionFill: "#fef08a" },
+  },
+  {
+    id: "chaos",
+    label: "Chaos",
+    blurb: "Absurd sci-fi comedy, weird and wild",
+    family: "signature",
+    render: {
+      signature:
+        "An original adult animated sci-fi comedy look: simple, bold, readable cartoon shapes; deliberately weird and funny; nothing copied from any existing show.",
+      linework: "Clean, slightly wobbly uniform outlines; simple geometric construction; big expressive silhouettes.",
+      anatomy: "Exaggerated, rubbery cartoon anatomy: oversized heads, noodly limbs, bulging or tiny eyes, extreme reaction faces, sweat drops and gags; aliens with improbable body plans.",
+      colour: "Flat, punchy cel colours with acid accents (slime green, portal purple, hazard orange); simple two-tone shading.",
+      lightingAndShadow: "Simple cel shadows; glowing sci-fi light sources (portals, screens, lasers) cast coloured light.",
+      detailAndTexture: "Clean backgrounds packed with absurd sight gags: sentient objects, strange machines, ridiculous signage shapes (no readable text).",
+    },
+    direction: {
+      interpretation:
+        "Reinterpret every ordinary moment through escalating absurd sci-fi logic: the airport scanner becomes sentient, the boss is a three-eyed slug, a breakup triggers a portal storm. Keep the real emotional beat underneath, played deadpan. Every page lands a visual punchline.",
+      camera: "Mostly flat, sitcom-like framing for comic timing, interrupted by sudden extreme close-ups on horrified or deadpan faces, and characters staring at the reader.",
+      pacing: "Fast: setup, escalation, punchline. Use beat panels (a silent reaction) before the punchline. Small panels for timing, one big panel for the payoff.",
+      panelDensity: "dense",
+    },
+    cover: "Absurd visual gag: the hero in a ridiculous sci-fi predicament with a deadpan expression, weird creatures, a portal or explosion, bold flat colours.",
+    avoid: ["realistic rendering", "gritty shading", "copying any existing cartoon's characters or exact look"],
+    lettering: { ...classicLettering, captionFill: "#bbf7d0" },
+  },
+  {
+    id: "ink",
+    label: "Ink",
+    blurb: "Elegant hand-drawn line art",
+    family: "signature",
+    render: {
+      signature:
+        "Beautiful, intentional hand-drawn ink illustration, clearly drawn by a human hand with pen and brush on paper: not a coloured image with an edge filter.",
+      linework: "Expressive brush and fine-nib pen lines with natural pressure variation; confident economy of line; crosshatching and stippling for tone.",
+      anatomy: "Elegant, slightly stylised naturalistic figures; gesture-first drawing; faces suggested with a few precise marks.",
+      colour: "Black ink on warm off-white paper, with at most one spot accent colour (vermilion or indigo wash) used sparingly for emphasis.",
+      lightingAndShadow: "Light shown through hatching density and solid blacks; generous white space as light.",
+      detailAndTexture: "Visible paper grain, ink pooling and dry-brush texture; backgrounds sparse and suggestive, detailed only where it matters.",
+    },
+    direction: {
+      interpretation:
+        "Say more with less. Find the quiet, symbolic image in each moment: a clock, an empty chair, a tiny plane leaving. Understated, wry, literary; let silence do the work.",
+      camera: "Calm, composed framing with lots of negative space; small figures in big spaces; telling close-ups of hands and objects.",
+      pacing: "Unhurried: fewer, larger panels; silent panels; one idea per panel.",
+      panelDensity: "sparse",
+    },
+    cover: "Minimal, elegant ink composition: a single symbolic image in lots of white space, one accent colour, gallery-print quality.",
+    avoid: ["full-colour painting", "digital gradients", "photographic rendering", "heavy outlines on everything"],
+    lettering: { pageColor: "#fbf8f1", captionFill: "#fbf8f1", captionInk: "#1c1917", captionFont: "hand", balloonFont: "hand" },
   },
   {
     id: "manga",
     label: "Manga",
-    blurb: "Expressive faces, black & white tones",
-    art: [
-      "Japanese manga art, black and white only (no colour).",
-      "Clean precise line art with tapered strokes; expressive faces with large detailed eyes;",
-      "grey screentone shading and gradients; speed lines and focus lines for emotion and motion;",
-      "detailed backgrounds for establishing shots, simplified backgrounds with sparkles or tone patterns for emotional close-ups;",
-      "cinematic framing with dramatic close-ups.",
-    ].join(" "),
-    storytelling:
-      "Linger on feelings: quiet reaction panels, inner thoughts, small silent beats before big emotions. Use thought balloons.",
+    blurb: "Black & white, screentones, big emotions",
+    family: "signature",
+    render: {
+      signature: "High-quality Japanese manga art in black and white, original characters only.",
+      linework: "Clean, precise G-pen line art with tapered strokes; crisp hair rendering; speed lines and focus lines for motion and emotion.",
+      anatomy: "Manga proportions with expressive, detailed eyes; dramatic emotional faces; chibi or comedic simplification only for comic beats.",
+      colour: "Black and white only, with grey screentones and gradient tones; no colour.",
+      lightingAndShadow: "Screentone gradients, solid black shadows, sparkle and flare effects for emotional moments.",
+      detailAndTexture: "Detailed, accurate backgrounds for establishing shots; tone patterns, flowers or sparkles behind emotional close-ups.",
+    },
+    direction: {
+      interpretation:
+        "Amplify feelings. Let emotional beats breathe with reaction shots, inner thoughts and dramatic close-ups; switch to energetic action framing for big moments.",
+      camera: "Cinematic manga staging: extreme emotional close-ups, eye shots, dynamic diagonals, impact frames, wide establishing shots for new places.",
+      pacing: "Decompressed: several small reaction panels around one big emotional or action panel. Use thought balloons generously.",
+      panelDensity: "dense",
+    },
+    cover: "Manga volume cover: a striking character-focused composition with dynamic pose, dramatic screentone or limited-colour treatment.",
+    avoid: ["colour", "Western superhero rendering", "copying specific manga characters"],
     lettering: { ...classicLettering, captionFill: "#ffffff" },
   },
+
+  // --- Classic styles ------------------------------------------------------------------------
   {
     id: "ligne-claire",
     label: "Clear Line",
     blurb: "Classic European adventure albums",
-    art: [
-      "European 'ligne claire' (clear line) comic album style.",
-      "Uniform-weight clean black outlines everywhere, no hatching;",
-      "flat bright colours with almost no shading, realistic detailed backgrounds and vehicles,",
-      "slightly simplified, cartoonish characters against those realistic settings;",
-      "even daylight, clear readable staging, every panel composed like a postcard.",
-    ].join(" "),
-    storytelling: "Light adventure tone with gentle humour; clear cause-and-effect from panel to panel.",
+    family: "classic",
+    render: {
+      signature: "European 'ligne claire' (clear line) comic album style.",
+      linework: "Uniform-weight clean black outlines everywhere, no hatching.",
+      anatomy: "Slightly simplified, cartoonish characters against realistic settings.",
+      colour: "Flat bright colours with almost no shading.",
+      lightingAndShadow: "Even daylight, minimal shadows.",
+      detailAndTexture: "Realistic, detailed backgrounds and vehicles; every panel composed like a postcard.",
+    },
+    direction: {
+      interpretation: "Light adventure with gentle humour and clear cause and effect.",
+      camera: "Clear, readable staging at eye level; wide shots that show the whole scene.",
+      pacing: "Steady, even rhythm; regular grids.",
+      panelDensity: "dense",
+    },
+    cover: "Adventure-album cover: the heroes mid-adventure in a vivid, detailed setting.",
+    avoid: ["hatching", "gradients", "dark gritty tones"],
     lettering: { ...classicLettering, captionFill: "#fef9c3" },
   },
   {
     id: "newspaper",
     label: "Sunday Strip",
     blurb: "Warm, retro newspaper funnies",
-    art: [
-      "Vintage Sunday newspaper comic strip.",
-      "Simple rounded characters with big noses and expressive gestures; brush-ink outlines;",
-      "limited warm palette printed on slightly yellowed newsprint with visible Ben-Day dots and slight colour misregistration;",
-      "simple backgrounds, clear staging, gentle slapstick body language.",
-    ].join(" "),
-    storytelling: "Warm and funny. Each page should land a small gag or a sweet punchline.",
+    family: "classic",
+    render: {
+      signature: "Vintage Sunday newspaper comic strip.",
+      linework: "Brush-ink outlines; simple rounded characters with big noses and expressive gestures.",
+      anatomy: "Cartoon proportions, gentle slapstick body language.",
+      colour: "Limited warm palette printed on slightly yellowed newsprint with visible Ben-Day dots and slight misregistration.",
+      lightingAndShadow: "Flat, printed colour; little shading.",
+      detailAndTexture: "Simple backgrounds; paper texture.",
+    },
+    direction: {
+      interpretation: "Warm and funny; every page lands a small gag or a sweet punchline.",
+      camera: "Flat, stage-like framing.",
+      pacing: "Strip rhythm: setup, beat, punchline.",
+      panelDensity: "dense",
+    },
+    cover: "A warm, funny cover gag starring the main characters.",
+    avoid: ["realistic rendering", "dramatic lighting"],
     lettering: { ...classicLettering, pageColor: "#fbf3df", captionFill: "#fef3c7" },
   },
   {
     id: "cartoon",
     label: "Modern Cartoon",
     blurb: "Bright, friendly, animated-film feel",
-    art: [
-      "Modern animated-film cartoon illustration.",
-      "Friendly rounded shapes and appealing stylised proportions; clean thick outlines;",
-      "bright cheerful colours with soft cel shading and gentle gradients; warm, glowing lighting;",
-      "expressive poses and faces, lively but uncluttered backgrounds.",
-    ].join(" "),
-    storytelling: "Upbeat and heartfelt, with playful humour and expressive reactions.",
+    family: "classic",
+    render: {
+      signature: "Modern animated-film cartoon illustration.",
+      linework: "Clean thick outlines.",
+      anatomy: "Friendly rounded shapes and appealing stylised proportions; expressive poses and faces.",
+      colour: "Bright cheerful colours with soft cel shading and gentle gradients.",
+      lightingAndShadow: "Warm, glowing lighting.",
+      detailAndTexture: "Lively but uncluttered backgrounds.",
+    },
+    direction: {
+      interpretation: "Upbeat and heartfelt, with playful humour and expressive reactions.",
+      camera: "Friendly, varied framing with some dynamic angles.",
+      pacing: "Balanced, bouncy rhythm.",
+      panelDensity: "balanced",
+    },
+    cover: "A warm, joyful character moment with bright colours.",
+    avoid: ["gritty textures", "harsh shadows"],
     lettering: classicLettering,
   },
   {
     id: "graphic-novel",
     label: "Graphic Novel",
     blurb: "Painterly, grounded, literary",
-    art: [
-      "Contemporary literary graphic novel illustration.",
-      "Loose confident ink lines with painterly digital colour and visible brush texture;",
-      "muted, naturalistic palette with one warm accent colour per scene; soft natural light;",
-      "grounded realistic proportions, subtle acting in faces and hands, atmospheric environments.",
-    ].join(" "),
-    storytelling: "Reflective and intimate. Let captions carry a thoughtful narrator voice; allow silent panels.",
+    family: "classic",
+    render: {
+      signature: "Contemporary literary graphic novel illustration.",
+      linework: "Loose, confident ink lines.",
+      anatomy: "Grounded realistic proportions with subtle acting in faces and hands.",
+      colour: "Painterly digital colour with visible brush texture; muted naturalistic palette with one warm accent per scene.",
+      lightingAndShadow: "Soft natural light.",
+      detailAndTexture: "Atmospheric environments.",
+    },
+    direction: {
+      interpretation: "Reflective and intimate; a thoughtful narrator voice in captions; silent panels allowed.",
+      camera: "Observational, film-like framing.",
+      pacing: "Slow and considered.",
+      panelDensity: "balanced",
+    },
+    cover: "A quiet, evocative painted image with a literary feel.",
+    avoid: ["superhero exaggeration", "glossy rendering"],
     lettering: { ...classicLettering, captionFill: "#f5f0e6", captionFont: "hand", balloonFont: "hand" },
   },
   {
     id: "noir",
     label: "Noir",
     blurb: "Moody shadows, high contrast",
-    art: [
-      "Graphic noir comic art.",
-      "Stark high-contrast black and white with large areas of solid black shadow;",
-      "a single accent colour of deep muted red used sparingly; heavy brush ink, venetian-blind and streetlight lighting;",
-      "rain, smoke and silhouettes; dramatic low and high camera angles.",
-    ].join(" "),
-    storytelling: "First-person, hard-boiled narrator captions with dry wit, even for happy stories.",
-    lettering: {
-      pageColor: "#0b0b0b",
-      captionFill: "#111111",
-      captionInk: "#f5f5f5",
-      captionFont: "typewriter",
-      balloonFont: "comic",
+    family: "classic",
+    render: {
+      signature: "Graphic noir comic art.",
+      linework: "Heavy brush ink.",
+      anatomy: "Realistic, angular figures in silhouette.",
+      colour: "Stark high-contrast black and white with a single accent colour of deep muted red, used sparingly.",
+      lightingAndShadow: "Large areas of solid black shadow; venetian-blind and streetlight lighting; rain, smoke and silhouettes.",
+      detailAndTexture: "Gritty urban texture.",
     },
+    direction: {
+      interpretation: "First-person, hard-boiled narrator captions with dry wit, even for happy stories.",
+      camera: "Dramatic low and high angles; faces half in shadow.",
+      pacing: "Measured, suspenseful.",
+      panelDensity: "balanced",
+    },
+    cover: "A moody silhouette in hard light and shadow, with one red accent.",
+    avoid: ["bright colours", "soft cheerful lighting"],
+    lettering: { pageColor: "#0b0b0b", captionFill: "#111111", captionInk: "#f5f5f5", captionFont: "typewriter", balloonFont: "comic" },
   },
   {
     id: "watercolor",
     label: "Watercolour Storybook",
     blurb: "Soft, dreamy, heartfelt",
-    art: [
-      "Soft watercolour storybook illustration.",
-      "Delicate pencil and fine-ink linework; translucent washes of pastel colour with soft blooms and bleeding edges;",
-      "textured cold-press paper visible; warm nostalgic golden light; gentle, tender expressions;",
-      "slightly simplified, charming characters.",
-    ].join(" "),
-    storytelling: "Tender and nostalgic, like a family storybook read aloud.",
+    family: "classic",
+    render: {
+      signature: "Soft watercolour storybook illustration.",
+      linework: "Delicate pencil and fine-ink linework.",
+      anatomy: "Slightly simplified, charming characters with tender expressions.",
+      colour: "Translucent washes of pastel colour with soft blooms and bleeding edges.",
+      lightingAndShadow: "Warm nostalgic golden light.",
+      detailAndTexture: "Textured cold-press paper visible.",
+    },
+    direction: {
+      interpretation: "Tender and nostalgic, like a family storybook read aloud.",
+      camera: "Gentle, eye-level framing.",
+      pacing: "Calm, with large picture-book panels.",
+      panelDensity: "sparse",
+    },
+    cover: "A tender, glowing storybook scene.",
+    avoid: ["hard digital edges", "harsh contrast"],
     lettering: { ...classicLettering, pageColor: "#fffaf0", captionFill: "#fdf6e3", captionFont: "hand", balloonFont: "hand" },
   },
   {
     id: "desi-classic",
     label: "Desi Classic",
     blurb: "Vintage Indian illustrated comics",
-    art: [
-      "Vintage Indian illustrated comic book style from the 1970s-80s.",
-      "Detailed realistic figure drawing with confident ink outlines; flat, rich printed colours (saffron, deep blue, maroon, leaf green)",
-      "with subtle period printing texture; ornate clothing, jewellery and architectural detail;",
-      "expressive faces and graceful classical poses; vivid Indian settings, from village to city.",
-    ].join(" "),
-    storytelling: "Storyteller narration with warmth and gravitas, as if retelling a family legend.",
+    family: "classic",
+    render: {
+      signature: "Vintage Indian illustrated comic book style from the 1970s-80s.",
+      linework: "Detailed realistic figure drawing with confident ink outlines.",
+      anatomy: "Expressive faces and graceful classical poses.",
+      colour: "Flat, rich printed colours (saffron, deep blue, maroon, leaf green) with subtle period printing texture.",
+      lightingAndShadow: "Simple printed shading.",
+      detailAndTexture: "Ornate clothing, jewellery and architectural detail; vivid Indian settings.",
+    },
+    direction: {
+      interpretation: "Storyteller narration with warmth and gravitas, as if retelling a family legend.",
+      camera: "Classical, theatrical staging.",
+      pacing: "Steady, narrated.",
+      panelDensity: "balanced",
+    },
+    cover: "A heroic, ornate scene in the style of a classic illustrated legend.",
+    avoid: ["modern glossy rendering"],
     lettering: { ...classicLettering, captionFill: "#fde68a" },
   },
 ];
 
+function artFor(recipe: StyleRecipe): string {
+  const r = recipe.render;
+  const avoid = [...recipe.avoid, ...ALWAYS_AVOID];
+  return [
+    r.signature,
+    `Line: ${r.linework}`,
+    `Figures: ${r.anatomy}`,
+    `Colour: ${r.colour}`,
+    `Light: ${r.lightingAndShadow}`,
+    `Detail: ${r.detailAndTexture}`,
+    `Avoid: ${avoid.join("; ")}.`,
+    recipe.lora ? `(${recipe.lora.trigger})` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function storytellingFor(recipe: StyleRecipe): string {
+  const d = recipe.direction;
+  const density = { sparse: "about 2-3 panels per page", balanced: "about 3-5 panels per page", dense: "about 4-6 panels per page" }[d.panelDensity];
+  return [`Interpretation: ${d.interpretation}`, `Camera: ${d.camera}`, `Pacing: ${d.pacing} Typically ${density}.`, `Covers: ${recipe.cover}`].join(" ");
+}
+
+export const COMIC_STYLES: ComicStyle[] = RECIPES.map((recipe) => ({
+  ...recipe,
+  art: artFor(recipe),
+  storytelling: storytellingFor(recipe),
+}));
+
+/** Old style ids that were renamed or merged, so earlier comics still open. */
+const ALIASES: Record<string, string> = { superhero: "prestige" };
+
 export function getStyle(id: string): ComicStyle | undefined {
-  return COMIC_STYLES.find((style) => style.id === id);
+  const resolved = ALIASES[id] ?? id;
+  return COMIC_STYLES.find((style) => style.id === resolved);
 }
 
 export function styleSampleUrl(id: string): string {
-  return `/styles/${id}.webp`;
+  return `/styles/${ALIASES[id] ?? id}.webp`;
 }
