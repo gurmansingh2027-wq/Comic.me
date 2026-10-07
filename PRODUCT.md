@@ -13,8 +13,10 @@ New flow: **Your story (voice) → Style → Characters → Storyboard → Your 
 - ✅ **Your story — voice interview** (`/create`). Tap the mic and talk (or type). Claude (`src/lib/engines/interview.ts`) reacts and asks one follow-up question at a time (usually 4–7), read aloud by OpenAI text-to-speech (`gpt-4o-mini-tts`); answers are transcribed with `gpt-transcribe` (`src/lib/engines/voice.ts`). When it has enough (or the user says so) Claude writes the story up with a cast list; the user edits it and **locks** it. English only for now. Progress survives a page refresh.
 - ✅ **Style** — pick one of 9 styles, each shown with a sample picture.
 - ✅ **Characters** (`/comic/<id>/characters`). Claude reads the locked story and lists the cast, marking each person main, supporting or minor (`src/lib/engines/characters.ts`). For each main/supporting character the user either uploads 1–4 photos or lets AI suggest a look. Claude checks the photos (good / needs another photo / unusable, with a friendly explanation). OpenAI draws a character design sheet (full body + portrait) in the chosen style, from the photos when given. The user approves it or asks for changes (up to 6 designs per character). On approval Claude writes a precise description of the design. Minor characters are drawn from their text description. Users can edit, add or remove characters. Business logic lives in `src/lib/cast-service.ts`.
-- ⏳ **Storyboard** — editable wireframe pages: panel layouts, stick figures, add/remove panels and dialogue, before any expensive art. Not built yet.
-- ✅ **Your comic** — as below.
+- ✅ **Storyboard** (`/comic/<id>/storyboard`). After writing, the comic waits here; nothing is drawn (or paid for) until the user approves. Wireframe pages with code-drawn stick figures framed by camera shot. Edit title, tagline, cover idea, each panel's scene, caption and dialogue (speaker, balloon type, side); add/remove/reorder panels and pages; pick layouts. Captions and balloons can be dragged anywhere on the page and resized. Autosaves; shows estimated drawing time and cost (`src/components/StoryboardEditor.tsx`, `src/components/WireframePage.tsx`, `src/lib/script-edits.ts`).
+- ✅ **Your comic** — as below. On the finished comic, captions and balloons can still be dragged, resized and edited (free: only lettering changes), and any single panel or the cover can be redrawn with a requested change.
+- ⏱ Countdown timers (with a safety buffer) on every slow step: finding the cast, photo checks, character designs, writing, each panel and the whole comic (`src/components/Countdown.tsx`).
+- 💰 Cost log: every paid AI call is recorded on the comic with its estimated price (`src/lib/costs.ts`); the comic page shows the total, and `node scripts/cost-report.ts` prints all comics.
 
 How the comic itself is made:
 
@@ -22,6 +24,7 @@ How the comic itself is made:
 2. **Story Engine** (Claude, `claude-opus-5-5`), in two passes, running in the background while the page shows progress:
    - *Writer:* story bible (logline, tone, arc, how each person talks) → chooses the length (typically 6–10 pages, max 12 pages / 40 panels) → plans each page with a real comic layout → writes each panel (shot, scene, caption, balloons).
    - *Editor:* rereads it as a first-time reader and sharpens captions and dialogue for context and specificity.
+   - *Cover art director* (`src/lib/engines/cover.ts`): picks a cover approach that fits the story (iconic hero, symbolic object, dramatic moment, portrait montage, setting and scale, intimate close-up, then-and-now), writes a detailed art brief, and chooses the title typeface (6 options) and colours.
 3. **Page layouts** (`src/lib/layouts.ts`): 12 comic-book layouts from a full-page splash to 6-panel grids; big panels for big moments.
 4. **Art Engine** (OpenAI `gpt-image-2`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. For every panel, the approved design sheets of the characters in that scene (up to 4) are sent as reference pictures, so faces and outfits stay consistent. Paced for OpenAI's images-per-minute limit with automatic retries.
 5. **Render Engine** (browser canvas) letters every page: caption boxes and speech / shout / whisper / thought balloons in reading order, per-style lettering (fonts, caption colours, page colour). Downloads as a print-ready PDF (2:3 pages) or per-page PNG.
@@ -29,7 +32,7 @@ How the comic itself is made:
 
 Cost per comic (Oct 2026 prices, medium image quality): roughly $2–3 for a 10-page comic (~40 images at ~$0.05, plus ~$0.50 of Claude).
 
-Not yet built: login, payments, gallery, file/CV upload, storyboard editing before drawing, preview/paywall, social exports.
+Not yet built: login, payments, gallery, file/CV upload, preview/paywall, social exports, automatic quality checks, sound effects (SFX). Research into better models and custom style training is planned (see the roadmap discussion in the PR history).
 
 ## Eventual product flow
 
