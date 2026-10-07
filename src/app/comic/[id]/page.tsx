@@ -30,6 +30,7 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
         styleId={comic.styleId}
         initialStatus={stale ? "failed" : comic.status}
         initialError={stale ? "Writing was interrupted. Please try again." : comic.error}
+        initialSince={comic.updatedAt}
         initialScript={ready ? comic.script : undefined}
         alreadyDrawn={keys.filter((_, i) => drawn[i])}
       />

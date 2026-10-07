@@ -7,6 +7,7 @@ import { downloadComicPdf, downloadPagePng, loadImage, renderFullPage } from "@/
 import { renderFonts } from "@/lib/fonts";
 import { getStyle } from "@/lib/styles";
 import ComicPageCanvas, { type ImageStatus } from "./ComicPageCanvas";
+import Countdown, { ESTIMATES, formatDuration } from "./Countdown";
 
 /**
  * How many pictures are drawn at the same time. Kept low because new OpenAI accounts
@@ -20,15 +21,18 @@ type Props = {
   styleId: string;
   initialStatus: ComicStatus;
   initialError?: string;
+  /** When the current writing stage started (ISO time). */
+  initialSince?: string;
   initialScript?: ComicScript;
   alreadyDrawn: string[];
 };
 
-export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialScript, alreadyDrawn }: Props) {
+export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn }: Props) {
   const style = getStyle(styleId)!;
   const [status, setStatus] = useState<ComicStatus>(initialStatus);
   const [error, setError] = useState(initialError);
   const [script, setScript] = useState(initialScript);
+  const [since, setSince] = useState(() => (initialSince ? Date.parse(initialSince) : Date.now()));
 
   // --- Step 1: wait for the script to be written --------------------------------------------
   useEffect(() => {
@@ -39,6 +43,7 @@ export default function ComicViewer({ comicId, styleId, initialStatus, initialEr
       const data = await response.json();
       setStatus(data.status);
       setError(data.error);
+      if (data.since) setSince(Date.parse(data.since));
       if (data.script) setScript(data.script);
     }, POLL_MS);
     return () => clearInterval(timer);
@@ -47,21 +52,19 @@ export default function ComicViewer({ comicId, styleId, initialStatus, initialEr
   async function retryWriting() {
     setStatus("writing");
     setError(undefined);
+    setSince(Date.now());
     await fetch(`/api/comics/${comicId}`, { method: "POST" });
   }
 
   if (status !== "ready" || !script) {
-    return <WritingProgress status={status} error={error} onRetry={retryWriting} />;
+    return <WritingProgress status={status} error={error} since={since} onRetry={retryWriting} />;
   }
   return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} />;
 }
 
-function WritingProgress({ status, error, onRetry }: { status: ComicStatus; error?: string; onRetry: () => void }) {
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
+function WritingProgress({ status, error, since, onRetry }: { status: ComicStatus; error?: string; since: number; onRetry: () => void }) {
+  // While writing, the polish pass is still to come; while polishing, only its own time is left.
+  const estimate = status === "polishing" ? ESTIMATES.polishScript : ESTIMATES.writeScript + ESTIMATES.polishScript;
 
   if (status === "failed") {
     return (
@@ -99,9 +102,11 @@ function WritingProgress({ status, error, onRetry }: { status: ComicStatus; erro
           </li>
         ))}
       </ol>
+      <p className="rounded border-2 border-ink bg-pop p-3 text-center text-lg font-bold">
+        ⏱ <Countdown key={`${status}-${since}`} startedAt={since} seconds={estimate} />
+      </p>
       <p className="text-center text-sm text-neutral-600">
-        Writing usually takes 2–4 minutes ({Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")} so far). You can
-        leave this page open, or come back to this link later.
+        You can leave this page open, or come back to this link later.
       </p>
     </div>
   );
@@ -128,6 +133,7 @@ function ComicDrawing({
   const [images, setImages] = useState<Record<string, HTMLImageElement>>({});
   const [downloading, setDownloading] = useState(false);
 
+  const [drawingSince, setDrawingSince] = useState<Record<string, number>>({});
   const statusRef = useRef(statuses);
   const active = useRef(0);
   const urlFor = useCallback((key: string) => imageUrl(comicId, key), [comicId]);
@@ -171,6 +177,7 @@ function ComicDrawing({
         const next = keys.find((key) => statusRef.current[key] === "waiting");
         if (!next) return;
         setKeyStatus(next, "drawing");
+        setDrawingSince((current) => ({ ...current, [next]: Date.now() }));
         try {
           await draw(next);
           setKeyStatus(next, "ready");
@@ -197,7 +204,10 @@ function ComicDrawing({
 
   const readyCount = keys.filter((key) => statuses[key] === "ready").length;
   const allReady = readyCount === keys.length;
-  const minutesLeft = Math.max(1, Math.ceil((keys.length - readyCount) / 4.5));
+  const waitingCount = keys.filter((key) => statuses[key] === "waiting").length;
+  const drawingCount = keys.filter((key) => statuses[key] === "drawing").length;
+  // Several pictures draw at once, within OpenAI's per-minute limit; pad for the last few.
+  const secondsLeft = waitingCount * ESTIMATES.picturePerComic + (drawingCount > 0 ? ESTIMATES.picture : 0);
 
   async function handleDownload() {
     setDownloading(true);
@@ -223,6 +233,7 @@ function ComicDrawing({
       keys: pageKeys,
       images: pageKeys.map((key) => images[key] ?? null),
       statuses: pageKeys.map((key) => statuses[key]),
+      drawingSince: pageKeys.map((key) => drawingSince[key]),
       errors: pageKeys.map((key) => errors[key]),
       onRetry: retry,
       onSave: () => savePage(which),
@@ -243,7 +254,7 @@ function ComicDrawing({
           <p className="mt-2 text-sm text-neutral-700">
             {allReady
               ? "Your comic is ready!"
-              : `Drawing ${readyCount} of ${keys.length} pictures… about ${minutesLeft} min left. Keep this page open.`}
+              : `Drawing ${readyCount} of ${keys.length} pictures… about ${formatDuration(secondsLeft)} left. Keep this page open.`}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4 pt-2">

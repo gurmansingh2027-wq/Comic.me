@@ -13,6 +13,7 @@ import {
 } from "@/lib/engines/render";
 import { renderFonts } from "@/lib/fonts";
 import type { ComicStyle } from "@/lib/styles";
+import Countdown, { ESTIMATES } from "./Countdown";
 
 export type ImageStatus = "waiting" | "drawing" | "ready" | "error";
 
@@ -24,12 +25,14 @@ type Props = {
   keys: string[];
   images: (HTMLImageElement | null)[];
   statuses: ImageStatus[];
+  /** When each picture started drawing (ms), for its countdown. */
+  drawingSince?: (number | undefined)[];
   errors: (string | undefined)[];
   onRetry: (key: string) => void;
   onSave?: () => void;
 };
 
-export default function ComicPageCanvas({ script, style, which, keys, images, statuses, errors, onRetry, onSave }: Props) {
+export default function ComicPageCanvas({ script, style, which, keys, images, statuses, drawingSince = [], errors, onRetry, onSave }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isCover = which === "cover";
   const page = isCover ? null : script.pages[which];
@@ -96,6 +99,9 @@ export default function ComicPageCanvas({ script, style, which, keys, images, st
                     <div className="h-6 w-6 animate-spin rounded-full border-3 border-ink border-t-pop" />
                   ) : null}
                   <span className="text-xs font-bold">{statuses[i] === "drawing" ? "Drawing…" : "In the queue"}</span>
+                  {statuses[i] === "drawing" && drawingSince[i] && (
+                    <Countdown startedAt={drawingSince[i]!} seconds={ESTIMATES.picture} className="text-[11px]" />
+                  )}
                 </div>
               )}
             </div>
