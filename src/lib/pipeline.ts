@@ -1,5 +1,6 @@
 import "server-only";
 import { castReady, type Comic } from "./comic";
+import { addCost } from "./costs";
 import { designCover } from "./engines/cover";
 import { polishScript, writeScript } from "./engines/story";
 import { friendlyError, UserFacingError } from "./errors";
@@ -68,7 +69,9 @@ export async function runWriting(id: string): Promise<void> {
     const script = { ...polished, cover };
 
     // The user reviews and edits the storyboard before any (paid) drawing starts.
-    await saveComic({ ...comic, status: "ready", stage: "storyboard", script });
+    const finished = { ...comic, status: "ready" as const, stage: "storyboard" as const, script };
+    addCost(finished, "script");
+    await saveComic(finished);
   } catch (error) {
     if (comic) await saveComic({ ...comic, status: "failed", error: friendlyError(error).message });
   } finally {

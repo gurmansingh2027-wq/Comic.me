@@ -130,6 +130,9 @@ export function castReady(cast: CastMember[]): boolean {
  */
 export type ComicStage = "storyboard" | "drawing";
 
+export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw";
+export type CostEntry = { item: CostItem; usd: number; at: string; detail?: string };
+
 export type ComicStatus = "draft" | "writing" | "polishing" | "ready" | "failed";
 
 export type Comic = {
@@ -144,6 +147,8 @@ export type Comic = {
   stage?: ComicStage;
   /** How many single pictures the user has asked us to redraw (for limits and pricing later). */
   redraws?: number;
+  /** Every paid AI call made for this comic, with its estimated price (see src/lib/costs.ts). */
+  costLog?: CostEntry[];
   error?: string;
   script?: ComicScript;
 };

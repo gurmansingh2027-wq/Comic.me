@@ -1,3 +1,4 @@
+import { addCost } from "@/lib/costs";
 import { coverJob, drawImage, panelJob } from "@/lib/engines/art";
 import { errorResponse, UserFacingError } from "@/lib/errors";
 import { castFilePath, hasImage, imagePath, isValidImageKey, loadComic, loadImage, saveComic, saveImage, withComicLock } from "@/lib/storage";
@@ -58,7 +59,10 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
           .then(() =>
             withComicLock(id, async () => {
               const latest = await loadComic(id);
-              if (latest) await saveComic({ ...latest, redraws: (latest.redraws ?? 0) + 1 });
+              if (!latest) return;
+              const updated = { ...latest, redraws: (latest.redraws ?? 0) + 1 };
+              addCost(updated, "redraw", key);
+              await saveComic(updated);
             }),
           )
           .finally(() => inFlight.delete(flightKey));
@@ -71,6 +75,14 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
       if (!drawing) {
         drawing = drawImage(job)
           .then((image) => saveImage(id, key, image))
+          .then(() =>
+            withComicLock(id, async () => {
+              const latest = await loadComic(id);
+              if (!latest) return;
+              addCost(latest, "picture", key);
+              await saveComic(latest);
+            }),
+          )
           .finally(() => inFlight.delete(flightKey));
         inFlight.set(flightKey, drawing);
       }

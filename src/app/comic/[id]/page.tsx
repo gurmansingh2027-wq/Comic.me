@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
 import Stepper from "@/components/Stepper";
 import { imageKeys } from "@/lib/comic";
+import { costBreakdown, formatUsd, totalCost } from "@/lib/costs";
 import { isStale } from "@/lib/pipeline";
 import { hasImage, loadComic } from "@/lib/storage";
 
@@ -35,6 +36,24 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
         initialScript={ready ? comic.script : undefined}
         alreadyDrawn={keys.filter((_, i) => drawn[i])}
       />
+      {comic.costLog && comic.costLog.length > 0 && (
+        <details className="mx-auto max-w-xl text-sm text-neutral-600">
+          <summary className="cursor-pointer text-center">
+            Behind the scenes: AI cost for this comic so far ≈ {formatUsd(totalCost(comic.costLog))} (refresh to update)
+          </summary>
+          <ul className="mt-2 space-y-1 rounded border-2 border-neutral-300 bg-white p-3">
+            {costBreakdown(comic.costLog).map((row) => (
+              <li key={row.item} className="flex justify-between">
+                <span>
+                  {row.item.replace("-", " ")} × {row.count}
+                </span>
+                <span>{formatUsd(row.usd)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs">Estimates from list prices in src/lib/costs.ts. The voice interview (well under $0.50) isn&apos;t included.</p>
+        </details>
+      )}
     </div>
   );
 }
