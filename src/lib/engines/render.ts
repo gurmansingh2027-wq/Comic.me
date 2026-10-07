@@ -372,7 +372,14 @@ export function letteringBoxes(ctx: CanvasRenderingContext2D, page: Page, style:
 // --- Storyboard wireframes ----------------------------------------------------------------------
 
 /** A quick stick-figure sketch of a panel, drawn by code (free and instant), for the storyboard. */
-function drawWireframe(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, names: string[], fonts: RenderFonts) {
+function drawWireframe(
+  ctx: CanvasRenderingContext2D,
+  panel: Panel,
+  box: Box,
+  names: string[],
+  fonts: RenderFonts,
+  stageLabels: Record<string, string> = {},
+) {
   const ink = "#9a9488";
   ctx.fillStyle = "#fbfaf7";
   ctx.fillRect(box.x, box.y, box.w, box.h);
@@ -386,10 +393,17 @@ function drawWireframe(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, na
     return lower(panel.scene).includes(lower(name)) || (first.length >= 3 && lower(panel.scene).includes(first));
   });
   const speakers = [...new Map(panel.dialogue.map((line) => [line.speaker, line.side])).entries()];
-  const figures: { name: string; side: "left" | "right" | "middle" }[] = [
+  // Prefer the director's scene context (exactly who is in frame, at which age); fall back to names in the text.
+  const present = panel.context?.cast.length ? panel.context.cast.map((person) => person.name) : inScene;
+  const figures: { name: string; side: "left" | "right" | "middle"; stage?: string }[] = [
     ...speakers.map(([name, side]) => ({ name, side })),
-    ...inScene.filter((name) => !speakers.some(([speaker]) => speaker === name)).map((name) => ({ name, side: "middle" as const })),
-  ].slice(0, 4);
+    ...present.filter((name) => !speakers.some(([speaker]) => speaker === name)).map((name) => ({ name, side: "middle" as const })),
+  ]
+    .slice(0, 4)
+    .map((figure) => {
+      const stage = panel.context?.cast.find((person) => person.name === figure.name)?.stage;
+      return { ...figure, stage: stage ? stageLabels[`${figure.name}|${stage}`] ?? stage : undefined };
+    });
 
   // Shot type sets how big the figures are (closer shots crop below the frame) and whether we see the horizon.
   const framing = {
@@ -451,7 +465,12 @@ function drawWireframe(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, na
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const labelY = head > size * 1.4 ? top + head : top + head * 2 + size;
-    ctx.fillText(figure.name.split(/\s+/)[0].toUpperCase(), cx, Math.min(box.y + box.h - 40, labelY));
+    const labelAt = Math.min(box.y + box.h - 40, labelY);
+    ctx.fillText(figure.name.split(/\s+/)[0].toUpperCase(), cx, labelAt);
+    if (figure.stage) {
+      ctx.font = `400 ${Math.max(14, size * 0.7)}px ${fonts.comic}`;
+      ctx.fillText(`(${figure.stage.split(/[(,]/)[0].trim().toLowerCase()})`, cx, labelAt + size);
+    }
   });
 
   // What the artist will draw, so the user can read the plan.
@@ -491,7 +510,7 @@ export function drawPage(
   images: (HTMLImageElement | null)[],
   style: ComicStyle,
   fonts: RenderFonts,
-  options: { wireframe?: { names: string[] } } = {},
+  options: { wireframe?: { names: string[]; stageLabels?: Record<string, string> } } = {},
 ): void {
   const { lettering } = style;
   const dark = !options.wireframe && isDark(lettering.pageColor);
@@ -509,7 +528,7 @@ export function drawPage(
     ctx.clip();
     const image = images[i];
     if (options.wireframe) {
-      drawWireframe(ctx, panel, box, options.wireframe.names, fonts);
+      drawWireframe(ctx, panel, box, options.wireframe.names, fonts, options.wireframe.stageLabels);
     } else if (image) {
       drawCoverFit(ctx, image, box);
     } else {
