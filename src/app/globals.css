@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-comic);
+  --font-title: var(--font-title);
+  --color-paper: #fffaf0;
+  --color-ink: #111111;
+  --color-pop: #facc15;
+  --color-zap: #ef4444;
+}
+
+body {
+  background-color: var(--color-paper);
+  background-image: radial-gradient(rgb(17 17 17 / 0.07) 1px, transparent 1px);
+  background-size: 14px 14px;
+  color: var(--color-ink);
+}
+
+/* Chunky comic-book box: thick outline + offset shadow. */
+.comic-box {
+  border: 3px solid var(--color-ink);
+  box-shadow: 5px 5px 0 var(--color-ink);
+}
