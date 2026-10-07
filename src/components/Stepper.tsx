@@ -2,7 +2,7 @@ export const STEPS = ["Your story", "Style", "Characters", "Storyboard", "Your c
 export type Step = (typeof STEPS)[number];
 
 /** Steps that aren't built yet; shown so people can see where the flow is going. */
-const COMING_SOON: Step[] = ["Storyboard"];
+const COMING_SOON: Step[] = [];
 
 export default function Stepper({ current }: { current: Step }) {
   const currentIndex = STEPS.indexOf(current);

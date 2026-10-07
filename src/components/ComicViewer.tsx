@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type ComicStatus } from "@/lib/comic";
 import { downloadComicPdf, downloadPagePng, loadImage, renderFullPage } from "@/lib/engines/render";
@@ -29,6 +30,7 @@ type Props = {
 
 export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn }: Props) {
   const style = getStyle(styleId)!;
+  const router = useRouter();
   const [status, setStatus] = useState<ComicStatus>(initialStatus);
   const [error, setError] = useState(initialError);
   const [script, setScript] = useState(initialScript);
@@ -41,13 +43,18 @@ export default function ComicViewer({ comicId, styleId, initialStatus, initialEr
       const response = await fetch(`/api/comics/${comicId}`).catch(() => null);
       if (!response?.ok) return;
       const data = await response.json();
+      // Once written, the comic goes to the storyboard for review before any drawing.
+      if (data.status === "ready" && data.stage === "storyboard") {
+        router.push(`/comic/${comicId}/storyboard`);
+        return;
+      }
       setStatus(data.status);
       setError(data.error);
       if (data.since) setSince(Date.parse(data.since));
       if (data.script) setScript(data.script);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [comicId, status]);
+  }, [comicId, status, router]);
 
   async function retryWriting() {
     setStatus("writing");
@@ -87,7 +94,7 @@ function WritingProgress({ status, error, since, onRetry }: { status: ComicStatu
     { label: "Reading your story", done: true },
     { label: "Planning the pages and writing every panel", done: status === "polishing", active: status === "writing" },
     { label: "Editor polishing the dialogue", done: false, active: status === "polishing" },
-    { label: "Drawing the cover and panels", done: false },
+    { label: "Your storyboard to review and edit", done: false },
   ];
   return (
     <div className="comic-box mx-auto max-w-xl space-y-5 bg-white p-8">

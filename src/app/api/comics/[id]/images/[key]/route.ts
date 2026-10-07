@@ -16,6 +16,9 @@ export async function POST(_request: Request, ctx: RouteContext<"/api/comics/[id
     const { id, key } = await ctx.params;
     const comic = await loadComic(id);
     const script = comic?.script;
+    if (comic?.stage === "storyboard") {
+      throw new UserFacingError("Approve the storyboard before we start drawing.", 409);
+    }
     if (!comic || !script || comic.status !== "ready" || !isValidImageKey(key)) {
       throw new UserFacingError("We couldn't find that picture.", 404);
     }

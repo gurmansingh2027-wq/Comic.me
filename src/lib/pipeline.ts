@@ -60,7 +60,8 @@ export async function runWriting(id: string): Promise<void> {
       return draft;
     });
 
-    await saveComic({ ...comic, status: "ready", script });
+    // The user reviews and edits the storyboard before any (paid) drawing starts.
+    await saveComic({ ...comic, status: "ready", stage: "storyboard", script });
   } catch (error) {
     if (comic) await saveComic({ ...comic, status: "failed", error: friendlyError(error).message });
   } finally {

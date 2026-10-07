@@ -15,7 +15,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/comics/[id]
   const status = isStale(comic) ? "failed" : comic.status;
   const error = isStale(comic) ? "Writing was interrupted. Please try again." : comic.error;
   // `since`: when the current stage started, so the page can count down from the right point.
-  return Response.json({ status, error, since: comic.updatedAt, script: status === "ready" ? comic.script : undefined });
+  return Response.json({ status, stage: comic.stage, error, since: comic.updatedAt, script: status === "ready" ? comic.script : undefined });
 }
 
 /** Retries writing a comic whose script failed or was interrupted. */

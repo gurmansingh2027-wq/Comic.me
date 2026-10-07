@@ -149,7 +149,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
             <p className="font-bold">{state.ready ? "Your cast is ready." : "Approve every main and supporting character to continue."}</p>
             {(unsaved.length > 0 || adding) && <p className="text-sm text-neutral-600">Save or cancel your character edits before continuing.</p>}
             <button className="comic-box bg-zap px-8 py-3 font-title text-3xl tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={busy || !state.ready || unsaved.length > 0 || adding} onClick={startComic}>
-              {starting ? "Starting your comic…" : "Make my comic →"}
+              {starting ? "Starting…" : "Write my storyboard →"}
             </button>
           </section>
         </>

@@ -13,17 +13,25 @@ export type Side = "left" | "right";
 export type BalloonKind = "speech" | "shout" | "whisper" | "thought";
 export type Shot = "establishing" | "wide" | "medium" | "close-up" | "extreme close-up";
 
+/**
+ * Where the user dragged a caption or balloon, as fractions of the page (0–1), so it works
+ * at any size. `w` is the box width; text re-wraps to fit. Unset = placed automatically.
+ */
+export type LetterPos = { x: number; y: number; w: number };
+
 export type DialogueLine = {
   speaker: string;
   side: Side;
   kind: BalloonKind;
   text: string;
+  pos?: LetterPos;
 };
 
 export type Panel = {
   shot: Shot;
   scene: string;
   caption: string;
+  captionPos?: LetterPos;
   dialogue: DialogueLine[];
 };
 
@@ -103,6 +111,12 @@ export function castReady(cast: CastMember[]): boolean {
   return cast.filter(needsDesign).every((member) => member.design?.approved);
 }
 
+/**
+ * After writing, a comic waits in "storyboard" until the user approves it; then it moves to
+ * "drawing". Comics made before the storyboard existed have no stage and go straight to drawing.
+ */
+export type ComicStage = "storyboard" | "drawing";
+
 export type ComicStatus = "draft" | "writing" | "polishing" | "ready" | "failed";
 
 export type Comic = {
@@ -114,6 +128,7 @@ export type Comic = {
   intake?: Intake;
   cast?: CastMember[];
   status: ComicStatus;
+  stage?: ComicStage;
   error?: string;
   script?: ComicScript;
 };

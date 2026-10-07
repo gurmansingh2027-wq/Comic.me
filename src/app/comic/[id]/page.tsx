@@ -16,6 +16,7 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
   const comic = await loadComic(id);
   if (!comic) notFound();
   if (comic.status === "draft") redirect(`/comic/${id}/characters`);
+  if (comic.status === "ready" && comic.stage === "storyboard") redirect(`/comic/${id}/storyboard`);
 
   const stale = isStale(comic);
   const ready = comic.status === "ready" && comic.script;
