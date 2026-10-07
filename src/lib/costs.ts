@@ -1,7 +1,30 @@
-import type { Comic, CostEntry, CostItem } from "./comic";
+import type { Comic, CostEntry, CostItem, CostUsage } from "./comic";
 
 // Rough API prices (USD, October 2026) used for estimates shown to the user and for the
 // per-comic cost log. Update these when prices or models change.
+
+/** Claude price per million tokens, by model (input, output). Cache reads/writes are not split out. */
+export const CLAUDE_PER_MILLION: Record<string, { input: number; output: number }> = {
+  "claude-opus-5-5": { input: 4, output: 20 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
+  "claude-haiku-4-5": { input: 1, output: 5 },
+};
+
+/** gpt-image-2 price for one ~1 megapixel output picture, by quality. */
+export const IMAGE_PER_MEGAPIXEL: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
+/** Rough extra cost for each reference picture sent with an image edit (input image tokens). */
+export const IMAGE_REFERENCE = 0.01;
+
+export function claudeCost(model: string, inputTokens: number, outputTokens: number): number {
+  const price = CLAUDE_PER_MILLION[model] ?? CLAUDE_PER_MILLION["claude-opus-5-5"];
+  return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
+}
+
+export function imageCost(size: string, quality: string, references: number): number {
+  const [w, h] = size.split("x").map(Number);
+  const megapixels = w && h ? (w * h) / (1024 * 1024) : 1;
+  return megapixels * (IMAGE_PER_MEGAPIXEL[quality] ?? IMAGE_PER_MEGAPIXEL.medium) + references * IMAGE_REFERENCE;
+}
 
 export const PRICES = {
   /** One medium-quality ~1 megapixel gpt-image-2 picture, including character reference pictures. */
@@ -33,9 +56,14 @@ const PRICE_FOR: Record<CostItem, number> = {
   redraw: PRICES.picture,
 };
 
-/** Records a paid call on a comic object that is about to be saved. */
-export function addCost(comic: Comic, item: CostItem, detail?: string): void {
-  comic.costLog = [...(comic.costLog ?? []), { item, usd: PRICE_FOR[item], at: new Date().toISOString(), detail }];
+/**
+ * Records a paid call on a comic object that is about to be saved. With measured usage (see
+ * src/lib/meter.ts) the real cost is logged; otherwise a list-price estimate.
+ */
+export function addCost(comic: Comic, item: CostItem, detail?: string, usage?: CostUsage[]): void {
+  const measured = usage && usage.length > 0 ? usage.reduce((sum, entry) => sum + entry.usd, 0) : undefined;
+  const entry: CostEntry = { item, usd: measured ?? PRICE_FOR[item], at: new Date().toISOString(), detail, usage };
+  comic.costLog = [...(comic.costLog ?? []), entry];
 }
 
 export function totalCost(log: CostEntry[] = []): number {

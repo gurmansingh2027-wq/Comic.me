@@ -3,7 +3,9 @@ import { createReadStream } from "node:fs";
 import OpenAI, { toFile } from "openai";
 import type { ComicScript, Importance, SceneContext } from "../comic";
 import { mentionsCharacter } from "../cast-matching";
+import { imageCost } from "../costs";
 import { requireEnv, UserFacingError } from "../errors";
+import { recordUsage } from "../meter";
 import { COVER_SIZE, describeShape, imageSizeForAspect, LAYOUTS, panelAspect } from "../layouts";
 import type { ComicStyle } from "../styles";
 
@@ -160,6 +162,14 @@ export function panelJob(
     ? contextFor(script, panel.context, castRefs, offset)
     : castFor(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs, offset);
 
+  // Neighbouring panels, so each picture (and every redraw) flows with the story around it.
+  const flat = script.pages.flatMap((pg) => pg.panels);
+  const at = script.pages.slice(0, pageIndex).reduce((sum, pg) => sum + pg.panels.length, 0) + panelIndex;
+  const neighbours = [
+    flat[at - 1] && `Previous panel showed: ${flat[at - 1].scene.slice(0, 240)}`,
+    flat[at + 1] && `Next panel will show: ${flat[at + 1].scene.slice(0, 240)}`,
+  ].filter(Boolean);
+
   const prompt = [
     revisionNotes(revision),
     `A single comic book panel illustration: ${describeShape(aspect)}.`,
@@ -168,6 +178,7 @@ export function panelJob(
     `Scene: ${panel.scene}`,
     cast.notes,
     placements.length > 0 && `Composition: ${placements.join(" ")}`,
+    neighbours.length > 0 && `Story flow (for continuity only, don't draw these): ${neighbours.join(" ")}`,
     hasLettering &&
       "Leave room for lettering: keep the top third of the image as calm, simple background (sky, wall, ceiling). Frame the characters so their heads and faces sit below the top third, never at the very top of the frame.",
     NO_TEXT,
@@ -200,9 +211,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * New OpenAI accounts may only draw a few images per minute. When we hit that limit,
  * wait as long as OpenAI asks ("try again in 12s") and try again, instead of failing.
  */
-export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+export async function withRateLimitRetry<T>(fn: () => Promise<T>, onRetry?: () => void): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
+      if (attempt > 1) onRetry?.();
       return await fn();
     } catch (error) {
       if (!(error instanceof OpenAI.RateLimitError) || attempt >= 8 || /quota|billing/i.test(error.message)) throw error;
@@ -210,6 +222,12 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
       await sleep((seconds + 1 + Math.random() * 4) * 1000);
     }
   }
+}
+
+/** Logs one image call for the cost meter. */
+export function recordImageUsage(operation: string, size: string, references: number, retries: number): void {
+  const quality = imageQuality();
+  recordUsage({ provider: "openai", model: IMAGE_MODEL(), operation, image: { size, quality, references }, retries, usd: imageCost(size, quality, references) });
 }
 
 /** Draws one image; with reference pictures it uses OpenAI's edit endpoint so the characters match them. */
@@ -224,11 +242,16 @@ export async function drawImage(job: ArtJob): Promise<Buffer> {
     output_compression: 88,
   };
 
-  const result = await withRateLimitRetry(async () => {
-    if (job.references.length === 0) return client.images.generate(common);
-    const image = await Promise.all(job.references.map(referenceFile));
-    return client.images.edit({ ...common, image });
-  });
+  let retries = 0;
+  const result = await withRateLimitRetry(
+    async () => {
+      if (job.references.length === 0) return client.images.generate(common);
+      const image = await Promise.all(job.references.map(referenceFile));
+      return client.images.edit({ ...common, image });
+    },
+    () => retries++,
+  );
+  recordImageUsage(job.references.length ? "image.edit" : "image.generate", job.size, job.references.length, retries);
 
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) {

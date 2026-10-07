@@ -173,6 +173,7 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
     user: `Art style: ${style.label} — ${style.blurb}.\nHow this style tells stories: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}`,
     schema: ScriptSchema,
     effort: "high",
+    operation: "comic-director",
   });
 
   const pages: Page[] = draft.pages
@@ -211,6 +212,7 @@ export async function polishScript(story: string, script: ComicScript): Promise<
     user: `<original_story>\n${story}\n</original_story>\n\n<script>\n${JSON.stringify(script, null, 1)}\n</script>`,
     schema: EditSchema,
     effort: "medium",
+    operation: "dialogue-editor",
   });
 
   return {

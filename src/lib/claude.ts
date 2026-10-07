@@ -3,7 +3,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { BetaMessageParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type { z } from "zod";
+import { claudeCost } from "./costs";
 import { requireEnv, UserFacingError } from "./errors";
+import { recordUsage } from "./meter";
 
 const MODEL = "claude-opus-5-5";
 
@@ -19,6 +21,7 @@ export async function askClaude<S extends z.ZodType>({
   schema,
   effort,
   maxTokens = 64000,
+  operation = "claude",
 }: {
   system: string;
   /** Text, or content blocks (e.g. images followed by text). */
@@ -26,6 +29,8 @@ export async function askClaude<S extends z.ZodType>({
   schema: S;
   effort: "low" | "medium" | "high";
   maxTokens?: number;
+  /** What this call is for, for the cost log (e.g. "comic-director"). */
+  operation?: string;
 }): Promise<z.infer<S>> {
   const client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
   const stream = client.beta.messages.stream({
@@ -39,6 +44,16 @@ export async function askClaude<S extends z.ZodType>({
     messages: [{ role: "user", content: user }],
   });
   const response = await stream.finalMessage();
+  const inputTokens =
+    response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0) + (response.usage.cache_read_input_tokens ?? 0);
+  recordUsage({
+    provider: "anthropic",
+    model: response.model,
+    operation,
+    inputTokens,
+    outputTokens: response.usage.output_tokens,
+    usd: claudeCost(MODEL, inputTokens, response.usage.output_tokens),
+  });
 
   if (response.stop_reason === "refusal") {
     throw new UserFacingError("Our AI couldn't help with this story. Try rewording it or leaving out sensitive details.");

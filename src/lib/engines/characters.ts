@@ -6,7 +6,7 @@ import { askClaude, imageBlock } from "../claude";
 import type { CastMember, Intake, PhotoVerdict } from "../comic";
 import { UserFacingError } from "../errors";
 import type { ComicStyle } from "../styles";
-import { IMAGE_MODEL, imageClient, imageQuality, referenceFile, withRateLimitRetry } from "./art";
+import { IMAGE_MODEL, imageClient, imageQuality, recordImageUsage, referenceFile, withRateLimitRetry } from "./art";
 
 // Character Engine: decides who needs a design, checks reference photos, draws character
 // designs in the comic's style, and describes approved designs so every panel matches them.
@@ -76,6 +76,7 @@ export async function planCast(story: string, intake?: Intake): Promise<PlannedM
     user: `<story>\n${story}\n</story>\n\n<interviewer_notes>\n${notes}\n</interviewer_notes>`,
     schema: CastSchema,
     effort: "low",
+    operation: "cast-planner",
     maxTokens: 24000,
   });
   return cast.slice(0, 12).map((person) => ({
@@ -118,6 +119,7 @@ export async function checkPhotos(member: CastMember, photos: Buffer[]): Promise
     ],
     schema: PhotoCheckSchema,
     effort: "low",
+    operation: "photo-check",
     maxTokens: 8000,
   });
 }
@@ -199,17 +201,21 @@ export async function drawDesign({
 
   const client = imageClient();
   const images = await Promise.all(references.map(referenceFile));
-  const result = await withRateLimitRetry(() =>
-    client.images.edit({
-      model: IMAGE_MODEL(),
-      image: images,
-      prompt,
-      size: DESIGN_SIZE,
-      quality: imageQuality(),
-      output_format: "webp",
-      output_compression: 88,
-    }),
+  let retries = 0;
+  const result = await withRateLimitRetry(
+    () =>
+      client.images.edit({
+        model: IMAGE_MODEL(),
+        image: images,
+        prompt,
+        size: DESIGN_SIZE,
+        quality: imageQuality(),
+        output_format: "webp",
+        output_compression: 88,
+      }),
+    () => retries++,
   );
+  recordImageUsage("character-design", DESIGN_SIZE, references.length, retries);
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) throw new UserFacingError("The image service didn't return a design. Please try again.", 502);
   return Buffer.from(base64, "base64");
@@ -235,6 +241,7 @@ export async function describeDesign(member: CastMember, design: Buffer, stageLa
     ],
     schema: DescriptionSchema,
     effort: "low",
+    operation: "design-description",
     maxTokens: 8000,
   });
   return description;

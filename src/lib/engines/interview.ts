@@ -69,6 +69,7 @@ export async function nextInterviewTurn(turns: InterviewTurn[]): Promise<z.infer
     user: `<conversation>\n${transcriptText(turns)}\n</conversation>\n\nThe storyteller has answered ${answers} time(s). Reply with your next turn.`,
     schema: TurnSchema,
     effort: "low",
+    operation: "interview-turn",
     maxTokens: 8000,
   });
 }
@@ -79,6 +80,7 @@ export async function composeStory(turns: InterviewTurn[]): Promise<ComposedStor
     user: `<interview>\n${transcriptText(turns)}\n</interview>`,
     schema: ComposedSchema,
     effort: "medium",
+    operation: "story-writeup",
     maxTokens: 32000,
   });
 }

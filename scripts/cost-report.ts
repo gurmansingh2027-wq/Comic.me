@@ -1,5 +1,6 @@
 // Prints what every saved comic cost in AI fees, to help set pricing tiers.
-// Run: node scripts/cost-report.ts
+// Run: node scripts/cost-report.ts            (one line per comic)
+//      node scripts/cost-report.ts --detail   (every measured AI call: provider, model, tokens, image size)
 
 import { readdirSync, readFileSync } from "node:fs";
 import { costBreakdown, formatUsd, totalCost } from "../src/lib/costs.ts";
@@ -24,6 +25,14 @@ for (const comic of rows) {
     .map((row) => `${row.item} ×${row.count}`)
     .join(", ");
   console.log(`${formatUsd(totalCost(comic.costLog)).padStart(7)}  ${String(comic.script?.title ?? "(not written yet)").padEnd(32)} ${pages} pages  ${breakdown}`);
+  // Measured calls: provider, model, operation, tokens / image size, retries.
+  const calls = comic.costLog.flatMap((entry: { usage?: unknown[] }) => entry.usage ?? []);
+  if (calls.length > 0 && process.argv.includes("--detail")) {
+    for (const call of calls) {
+      const size = call.image ? `${call.image.size} ${call.image.quality} +${call.image.references} refs` : `${call.inputTokens} in / ${call.outputTokens} out tokens`;
+      console.log(`         ${formatUsd(call.usd).padStart(6)}  ${call.provider}/${call.model}  ${call.operation}  ${size}${call.retries ? `  (${call.retries} retries)` : ""}`);
+    }
+  }
 }
 if (rows.length > 1) {
   const average = rows.reduce((sum, comic) => sum + totalCost(comic.costLog), 0) / rows.length;

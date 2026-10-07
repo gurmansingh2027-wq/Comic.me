@@ -303,7 +303,7 @@ export default function StoryboardEditor({
                     />
                   )}
                   <div className="flex items-center gap-2">
-                    <input id={`caption-${p}-${i}`} value={panel.caption} maxLength={400} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, caption: e.target.value }))} placeholder="Caption (narration box), optional" className={`${field} bg-amber-50`} />
+                    <input id={`caption-${p}-${i}`} value={panel.caption} maxLength={400} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, caption: e.target.value }))} placeholder="Narration (caption box), optional" className={`${field} bg-amber-50`} />
                     {panel.captionPos && <button className={small} onClick={() => moveLettering(p, { panel: i, ref: "caption" }, null)} title="Put it back in its automatic spot">↺ Auto</button>}
                   </div>
                   {panel.dialogue.map((line, l) => (

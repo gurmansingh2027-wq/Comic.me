@@ -204,7 +204,22 @@ export const MAX_STAGES_PER_CHARACTER = 4;
 export type ComicStage = "storyboard" | "drawing";
 
 export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw";
-export type CostEntry = { item: CostItem; usd: number; at: string; detail?: string };
+
+/** One measured AI call: who served it, which model, what it did, and what it cost. */
+export type CostUsage = {
+  provider: "anthropic" | "openai";
+  model: string;
+  operation: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Image calls: size, quality and how many reference pictures were sent. */
+  image?: { size: string; quality: string; references: number };
+  /** Times the call was retried after a rate limit (retries don't cost extra, but slow things down). */
+  retries?: number;
+  usd: number;
+};
+
+export type CostEntry = { item: CostItem; usd: number; at: string; detail?: string; usage?: CostUsage[] };
 
 export type ComicStatus = "draft" | "writing" | "polishing" | "ready" | "failed";
 

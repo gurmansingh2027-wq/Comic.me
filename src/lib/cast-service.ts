@@ -4,6 +4,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import { castReady, MAX_STAGES_PER_CHARACTER, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, type CastActivity, type CastMember, type CastState, type Comic } from "./comic";
 import { addCost } from "./costs";
+import { metered } from "./meter";
 import { checkPhotos, describeDesign, drawDesign, planCast } from "./engines/characters";
 import { UserFacingError } from "./errors";
 import { castFilePath, loadCastFile, loadComic, saveCastFile, saveComic, withComicLock } from "./storage";
@@ -120,8 +121,10 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
     }));
   }
   async function check(comic: Comic, member: CastMember) {
-    member.photoCheck = await deps.checkPhotos(member, await photoBytes(comic, member));
-    addCost(comic, "photo-check", member.name);
+    const photos = await photoBytes(comic, member);
+    const { result, usage } = await metered(() => deps.checkPhotos(member, photos));
+    member.photoCheck = result;
+    addCost(comic, "photo-check", member.name, usage);
     await deps.saveComic(comic);
   }
   async function locked(id: string, taskActivity: CastActivity, task: (comic: Comic) => Promise<void>): Promise<CastState> {
@@ -142,8 +145,8 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
     return locked(id, { action: command.action, memberId: "memberId" in command ? command.memberId : undefined }, async (comic) => {
       if (command.action === "initialize") {
         if (comic.cast !== undefined) return;
-        const planned = await deps.planCast(comic.story, comic.intake);
-        addCost(comic, "cast");
+        const { result: planned, usage } = await metered(() => deps.planCast(comic.story, comic.intake));
+        addCost(comic, "cast", undefined, usage);
         comic.cast = [];
         for (const person of planned.slice(0, MAX_CAST_MEMBERS)) {
           const fields = Fields.parse({ ...person, description: person.description.slice(0, 2000), source: "ai" });
@@ -204,19 +207,20 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
             if (stage.design?.file !== command.expectedDesign) throw new UserFacingError("This design has changed. Refresh and try again.", 409);
             if (stage.designAttempts >= MAX_DESIGN_ATTEMPTS) throw new UserFacingError("You've used all six designs for this age. You can still approve the current one.", 409);
             if (!member.design?.approved) throw new UserFacingError(`Approve ${member.name}'s main look first; other ages are drawn from it.`, 409);
-            const image = await deps.drawDesign({
+            const identityDesignPath = deps.castFilePath(id, member.design.file);
+            const { result: image, usage } = await metered(() => deps.drawDesign({
               member, style, photoPaths,
               stage,
-              identityDesignPath: deps.castFilePath(id, member.design.file),
+              identityDesignPath,
               previousDesignPath: stage.design && !stage.design.needsRedraw ? deps.castFilePath(id, stage.design.file) : undefined,
               feedback: command.feedback,
-            });
+            }));
             const file = `${randomUUID()}.webp`;
             await deps.saveCastFile(id, file, image);
             stage.design = { file, approved: false };
             stage.designAttempts++;
             stage.lastDesignRequestId = command.requestId;
-            addCost(comic, "character-design", `${member.name} · ${stage.label}`);
+            addCost(comic, "character-design", `${member.name} · ${stage.label}`, usage);
             break;
           }
           if (member.lastDesignRequestId === command.requestId) return;
@@ -227,17 +231,17 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
             if (!member.photoCheck) await check(comic, member);
             if (member.photoCheck?.verdict === "unusable") throw new UserFacingError(member.photoCheck.message);
           }
-          const image = await deps.drawDesign({
+          const { result: image, usage } = await metered(() => deps.drawDesign({
             member, style, photoPaths,
             previousDesignPath: member.design && !member.design.needsRedraw ? deps.castFilePath(id, member.design.file) : undefined,
             feedback: command.feedback,
-          });
+          }));
           const file = `${randomUUID()}.webp`;
           await deps.saveCastFile(id, file, image);
           member.design = { file, approved: false };
           member.designAttempts++;
           invalidateStages(member);
-          addCost(comic, "character-design", member.name);
+          addCost(comic, "character-design", member.name, usage);
           member.lastDesignRequestId = command.requestId;
           break;
         }
@@ -248,8 +252,9 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
             if (stage.design.approved) return;
             const image = await deps.loadCastFile(id, command.file);
             if (!image) throw new UserFacingError("The design is missing. Please generate it again.");
-            stage.look = await deps.describeDesign(member, image, `${stage.label}, age ${stage.ageRange}`);
-            addCost(comic, "design-description", `${member.name} · ${stage.label}`);
+            const described = await metered(() => deps.describeDesign(member, image, `${stage.label}, age ${stage.ageRange}`));
+            stage.look = described.result;
+            addCost(comic, "design-description", `${member.name} · ${stage.label}`, described.usage);
             stage.design = { ...stage.design, approved: true, needsRedraw: false };
             break;
           }
@@ -257,8 +262,11 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
           if (member.design.approved) return;
           const image = await deps.loadCastFile(id, command.file);
           if (!image) throw new UserFacingError("The design is missing. Please generate it again.");
-          member.description = await deps.describeDesign(member, image, member.mainStage ? `${member.mainStage.label}, age ${member.mainStage.ageRange}` : undefined);
-          addCost(comic, "design-description", member.name);
+          const described = await metered(() =>
+            deps.describeDesign(member, image, member.mainStage ? `${member.mainStage.label}, age ${member.mainStage.ageRange}` : undefined),
+          );
+          member.description = described.result;
+          addCost(comic, "design-description", member.name, described.usage);
           member.design.approved = true;
           member.design.needsRedraw = false;
           break;

@@ -100,6 +100,7 @@ export async function designCover(script: ComicScript, story: string, style: Com
     user: `Art style: ${style.label}. ${style.art}\nHow this style tells stories and designs covers: ${style.storytelling}\n\nTitle: ${script.title}\nTagline: ${script.tagline}\nLogline: ${script.bible?.logline ?? ""}\nTone: ${script.bible?.tone ?? ""}\nArc: ${script.bible?.arc ?? ""}\n\nPeople:\n${people}\n\n<page_outline>\n${outline}\n</page_outline>\n\n<original_story>\n${story.slice(0, 4000)}\n</original_story>`,
     schema: CoverSchema,
     effort: "medium",
+    operation: "cover-art-director",
     maxTokens: 16000,
   });
 
