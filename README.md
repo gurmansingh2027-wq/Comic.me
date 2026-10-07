@@ -26,13 +26,13 @@ After changing `.env.local`, stop and start the app again.
 | --- | --- |
 | Voice story interview + style picker | `src/app/create/page.tsx`, `src/components/StoryStudio.tsx`, `src/lib/engines/interview.ts`, `src/lib/engines/voice.ts` |
 | Characters: cast, photos, designs, approval | `src/app/comic/[id]/characters/page.tsx`, `src/components/CharacterStudio.tsx`, `src/lib/cast-service.ts`, `src/lib/engines/characters.ts` |
-| Comic styles (art direction + lettering) | `src/lib/styles.ts`, samples in `public/styles/` |
-| Claude writes, then edits, the script, then designs the cover (in the background) | `src/lib/engines/story.ts`, `src/lib/engines/cover.ts`, `src/lib/pipeline.ts` → `POST /api/comics/[id]` |
+| Style recipes (how each style draws AND directs the story) | `src/lib/styles.ts`, samples in `public/styles/` |
+| Comic Director writes the script with scene context, editor polishes it, art director proposes 3 covers (in the background) | `src/lib/engines/story.ts`, `src/lib/engines/cover.ts`, `src/lib/pipeline.ts` → `POST /api/comics/[id]` |
 | Storyboard: edit pages, panels, dialogue; drag bubbles | `src/app/comic/[id]/storyboard/page.tsx`, `src/components/StoryboardEditor.tsx`, `src/components/WireframePage.tsx`, `src/lib/script-edits.ts` |
 | Page layouts | `src/lib/layouts.ts` |
 | OpenAI draws the cover and each panel | `src/lib/engines/art.ts` → `POST /api/comics/[id]/images/[key]` |
 | Lettering, pages, PDF download, bubble editing and panel redraws | `src/lib/engines/render.ts`, `src/components/ComicViewer.tsx`, `src/components/ComicPageEditor.tsx` |
-| Cost estimates and per-comic cost log | `src/lib/costs.ts`; report: `node scripts/cost-report.ts` |
+| Measured cost log per comic | `src/lib/meter.ts`, `src/lib/costs.ts`; report: `node scripts/cost-report.ts --detail` |
 | Saved comics | `storage/comics/<id>/` (local only, not in git) |
 
 Redraw the style sample pictures: `node scripts/make-style-samples.ts --force`
