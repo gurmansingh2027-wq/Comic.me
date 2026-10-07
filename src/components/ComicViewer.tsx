@@ -94,7 +94,7 @@ function WritingProgress({ status, error, since, onRetry }: { status: ComicStatu
   const steps = [
     { label: "Reading your story", done: true },
     { label: "Planning the pages and writing every panel", done: status === "polishing", active: status === "writing" },
-    { label: "Editor polishing the dialogue", done: false, active: status === "polishing" },
+    { label: "Editor polishing the dialogue, art director designing the cover", done: false, active: status === "polishing" },
     { label: "Your storyboard to review and edit", done: false },
   ];
   return (

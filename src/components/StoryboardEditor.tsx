@@ -74,7 +74,7 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
         const response = await fetch(`/api/comics/${comicId}/storyboard`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: script.title, tagline: script.tagline, pages: script.pages }),
+          body: JSON.stringify({ title: script.title, tagline: script.tagline, coverScene: script.cover?.scene, pages: script.pages }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error ?? "Couldn't save your changes.");
@@ -127,7 +127,7 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
       const saved = await fetch(`/api/comics/${comicId}/storyboard`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: script.title, tagline: script.tagline, pages: script.pages }),
+        body: JSON.stringify({ title: script.title, tagline: script.tagline, coverScene: script.cover?.scene, pages: script.pages }),
       });
       if (!saved.ok) throw new Error((await saved.json().catch(() => ({}))).error ?? "Couldn't save your changes.");
       const response = await fetch(`/api/comics/${comicId}/storyboard`, { method: "POST" });
@@ -161,6 +161,18 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
             <input value={script.tagline} maxLength={200} onChange={(e) => setScript({ ...script, tagline: e.target.value })} className={field} />
           </label>
         </div>
+        {script.cover && (
+          <label className="block space-y-1 text-sm font-bold">
+            🎨 Cover idea{script.cover.design ? ` · ${script.cover.design.concept}` : ""}
+            <textarea
+              value={script.cover.scene}
+              rows={3}
+              maxLength={3000}
+              onChange={(e) => setScript({ ...script, cover: { ...script.cover!, scene: e.target.value } })}
+              className={`${field} resize-y font-normal`}
+            />
+          </label>
+        )}
       </section>
 
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3 shadow-[4px_4px_0_#111]">

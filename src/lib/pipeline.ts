@@ -1,5 +1,6 @@
 import "server-only";
 import { castReady, type Comic } from "./comic";
+import { designCover } from "./engines/cover";
 import { polishScript, writeScript } from "./engines/story";
 import { friendlyError, UserFacingError } from "./errors";
 import { loadComic, saveComic, withComicLock } from "./storage";
@@ -54,11 +55,17 @@ export async function runWriting(id: string): Promise<void> {
 
     comic = { ...comic, status: "polishing", script: draft };
     await saveComic(comic);
-    const script = await polishScript(comic.story, draft).catch((error) => {
+    const polished = await polishScript(comic.story, draft).catch((error) => {
       // The draft is already good enough to draw; don't fail the whole comic over the polish pass.
       console.error("Polish pass failed, keeping the draft:", error);
       return draft;
     });
+    // The cover gets its own art director pass, built around this story's theme.
+    const cover = await designCover(polished, comic.story, style, comic.cast).catch((error) => {
+      console.error("Cover design failed, keeping the writer's cover:", error);
+      return polished.cover;
+    });
+    const script = { ...polished, cover };
 
     // The user reviews and edits the storyboard before any (paid) drawing starts.
     await saveComic({ ...comic, status: "ready", stage: "storyboard", script });

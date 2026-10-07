@@ -68,14 +68,17 @@ function castFor(script: ComicScript, text: string, castRefs: CastRef[], offset 
 
 export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastRef[] = [], revision?: Revision): ArtJob {
   const scene = script.cover?.scene ?? script.pages[0].panels[0].scene;
+  const design = script.cover?.design;
   const cast = castFor(script, scene, castRefs, revision ? 1 : 0);
+  const titleSpace = design?.titlePosition === "bottom" ? "bottom quarter" : "top third";
   const prompt = [
     revisionNotes(revision),
-    "The front cover illustration of a comic book, portrait format.",
+    "The front cover of a premium comic book, portrait format: a showpiece illustration by a world-class comic cover artist, the kind of cover that sells the book from across the shop.",
     `Art style: ${style.art}`,
-    `Cover image: ${scene}`,
+    design && `Cover concept: ${design.concept}`,
+    `Cover brief: ${scene}`,
     cast.notes,
-    "Composition: an iconic, eye-catching cover. Keep the top third of the image as simple background (sky, wall, soft gradient) because the title will be added there later. Main characters large in the lower two-thirds.",
+    `Composition: one striking focal image with a strong silhouette; dramatic perspective and depth; cinematic lighting; a bold, limited colour palette; meticulous, finished rendering with rich detail where it matters. Keep the ${titleSpace} of the image as calm, simple background (sky, shadow, soft gradient) because the title will be lettered there later.`,
     NO_TEXT,
   ]
     .filter(Boolean)

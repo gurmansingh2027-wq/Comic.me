@@ -12,7 +12,8 @@ export const ESTIMATES = {
   characterDesign: 45,
   approve: 12,
   writeScript: 180,
-  polishScript: 75,
+  /** Editing pass + cover art director. */
+  polishScript: 110,
   /** One picture on its own. */
   picture: 50,
   /** Average time per picture when a whole comic is drawing (several at once, within the rate limit). */

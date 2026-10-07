@@ -52,12 +52,25 @@ export type StoryBible = {
   voices: { name: string; voice: string }[];
 };
 
+/** Title typefaces for covers, picked to suit each comic's theme. */
+export const COVER_FONTS = ["bangers", "bebas", "playfair", "marker", "abril", "cinzel"] as const;
+export type CoverFont = (typeof COVER_FONTS)[number];
+
+/** How the cover's title is lettered, chosen by the cover art director. */
+export type CoverDesign = {
+  concept: string;
+  titleFont: CoverFont;
+  titleFill: string;
+  titleOutline: string;
+  titlePosition: "top" | "bottom";
+};
+
 export type ComicScript = {
   title: string;
   tagline: string;
   bible: StoryBible | null;
   characters: Character[];
-  cover: { scene: string } | null;
+  cover: { scene: string; design?: CoverDesign } | null;
   pages: Page[];
 };
 

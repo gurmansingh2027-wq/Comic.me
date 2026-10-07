@@ -3,11 +3,11 @@
 // screen and in downloads, so they always match.
 
 import { PDFDocument } from "pdf-lib";
-import type { ComicScript, DialogueLine, LetterPos, Page, Panel } from "../comic";
+import type { ComicScript, CoverFont, DialogueLine, LetterPos, Page, Panel } from "../comic";
 import { GRID_COLS, GRID_ROWS, LAYOUTS, type Rect } from "../layouts";
 import type { ComicStyle, LetteringFont, Lettering } from "../styles";
 
-export type RenderFonts = Record<"title" | LetteringFont, string>;
+export type RenderFonts = Record<"title" | LetteringFont, string> & { cover: Record<CoverFont, string> };
 
 /** Pages are 2:3 portrait (like a printed comic book), 1600×2400 pixels. */
 export const PAGE_W = 1600;
@@ -47,6 +47,7 @@ export async function ensureFontsLoaded(fonts: RenderFonts): Promise<void> {
     document.fonts.load(`700 30px ${fonts.comic}`),
     document.fonts.load(`30px ${fonts.hand}`),
     document.fonts.load(`30px ${fonts.typewriter}`),
+    ...Object.values(fonts.cover).map((family) => document.fonts.load(`900 120px ${family}`)),
   ]);
 }
 
@@ -562,44 +563,75 @@ export function drawCover(
   ctx.textBaseline = "middle";
   ctx.fillText("COMIC.ME", 56 + 125, 56 + 40);
 
+  const design = script.cover?.design;
+  const family = design ? fonts.cover[design.titleFont] : fonts.title;
+  const weight = design && ["playfair", "cinzel"].includes(design.titleFont) ? 900 : 400;
+  const keepCase = design?.titleFont === "playfair";
+  const fill = design?.titleFill ?? "#facc15";
+  const outline = design?.titleOutline ?? "#111111";
+  const atBottom = design?.titlePosition === "bottom";
+
   // Title: as big as fits, up to three lines.
-  const title = script.title.toUpperCase();
+  const title = keepCase ? script.title : script.title.toUpperCase();
   let size = 230;
   let lines: string[] = [];
   for (; size >= 90; size -= 10) {
-    ctx.font = `${size}px ${fonts.title}`;
+    ctx.font = `${weight} ${size}px ${family}`;
     lines = wrapText(ctx, title, PAGE_W - 160);
     if (lines.length <= 3 && lines.every((l) => ctx.measureText(l).width <= PAGE_W - 160)) break;
   }
+  const lineHeight = size * 0.98;
+  const blockHeight = lines.length * lineHeight;
+  const titleTop = atBottom ? PAGE_H - 130 - blockHeight : 175;
+  ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
   lines.forEach((line, i) => {
-    const y = 180 + i * size * 0.95;
-    ctx.fillStyle = "#111111";
-    ctx.fillText(line, PAGE_W / 2 + 10, y + 10);
-    ctx.strokeStyle = "#111111";
-    ctx.lineWidth = size * 0.09;
+    const y = titleTop + i * lineHeight;
+    // Soft drop shadow, a bold outline, then the fill: reads over any artwork.
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = size * 0.12;
+    ctx.shadowOffsetY = size * 0.04;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = size * (design ? 0.07 : 0.09);
     ctx.strokeText(line, PAGE_W / 2, y);
-    ctx.fillStyle = "#facc15";
+    ctx.restore();
+    ctx.fillStyle = fill;
     ctx.fillText(line, PAGE_W / 2, y);
   });
 
-  // Tagline box near the bottom.
-  if (script.tagline.trim()) {
-    const block = textBlock(ctx, script.tagline.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
-    const pad = 24;
-    const w = block.width + pad * 2;
-    const h = block.height + pad * 2;
-    const x = (PAGE_W - w) / 2;
-    const y = PAGE_H - 120 - h;
-    ctx.fillStyle = style.lettering.captionFill;
-    ctx.strokeStyle = style.lettering.captionInk;
-    ctx.lineWidth = 5;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = style.lettering.captionInk;
-    drawTextLines(ctx, block, PAGE_W / 2, y + pad, "center");
+  if (!script.tagline.trim()) return;
+  if (design) {
+    // An understated tagline, like a film poster: just above the title at the bottom, or at the foot of the page.
+    ctx.font = `700 40px ${fonts.comic}`;
+    const taglineLines = wrapText(ctx, script.tagline.toUpperCase(), PAGE_W - 300);
+    const taglineTop = atBottom ? titleTop - 30 - taglineLines.length * 48 : PAGE_H - 110 - taglineLines.length * 48;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    taglineLines.forEach((line, i) => ctx.fillText(line, PAGE_W / 2, taglineTop + i * 48));
+    ctx.restore();
+    return;
   }
+
+  // Tagline box near the bottom (comics made before cover designs existed).
+  const block = textBlock(ctx, script.tagline.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
+  const pad = 24;
+  const w = block.width + pad * 2;
+  const h = block.height + pad * 2;
+  const x = (PAGE_W - w) / 2;
+  const y = PAGE_H - 120 - h;
+  ctx.fillStyle = style.lettering.captionFill;
+  ctx.strokeStyle = style.lettering.captionInk;
+  ctx.lineWidth = 5;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = style.lettering.captionInk;
+  drawTextLines(ctx, block, PAGE_W / 2, y + pad, "center");
 }
 
 // --- Downloads --------------------------------------------------------------------------------

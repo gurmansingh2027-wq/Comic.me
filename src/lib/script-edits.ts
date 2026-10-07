@@ -31,6 +31,7 @@ const PageSchema = z.object({ layout: z.enum(LAYOUT_IDS), panels: z.array(PanelS
 const EditableScript = z.object({
   title: z.string().trim().min(1).max(120),
   tagline: z.string().max(200),
+  coverScene: z.string().max(3000).optional(),
   pages: z.array(PageSchema).min(1).max(MAX_PAGES),
 });
 
@@ -50,6 +51,7 @@ export async function saveStoryboard(id: string, input: unknown): Promise<ComicS
       ...comic.script,
       title: edits.title,
       tagline: edits.tagline,
+      cover: comic.script.cover && edits.coverScene !== undefined ? { ...comic.script.cover, scene: edits.coverScene } : comic.script.cover,
       pages: edits.pages.map((page) => ({ ...page, layout: fitLayout(page.layout, page.panels.length) })),
     };
     await saveComic({ ...comic, script });
