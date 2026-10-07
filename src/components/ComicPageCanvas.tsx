@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ComicScript } from "@/lib/comic";
 import {
   createPageCanvas,
@@ -30,9 +30,13 @@ type Props = {
   errors: (string | undefined)[];
   onRetry: (key: string) => void;
   onSave?: () => void;
+  /** Redraw this picture with a requested change (used for the cover). */
+  onRedraw?: (feedback: string) => void;
 };
 
-export default function ComicPageCanvas({ script, style, which, keys, images, statuses, drawingSince = [], errors, onRetry, onSave }: Props) {
+export default function ComicPageCanvas({ script, style, which, keys, images, statuses, drawingSince = [], errors, onRetry, onSave, onRedraw }: Props) {
+  const [redrawing, setRedrawing] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isCover = which === "cover";
   const page = isCover ? null : script.pages[which];
@@ -108,8 +112,44 @@ export default function ComicPageCanvas({ script, style, which, keys, images, st
           ),
         )}
       </div>
+      {redrawing && onRedraw && (
+        <div className="space-y-2 rounded border-3 border-ink bg-pop p-3">
+          <p className="text-sm font-bold">Redraw the {label.toLowerCase()}: what should change?</p>
+          <textarea
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            rows={2}
+            maxLength={1000}
+            autoFocus
+            placeholder="For example: more dramatic, show the whole family, sunset colours"
+            className="w-full rounded border-2 border-ink bg-white px-2 py-1.5 text-sm"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onRedraw(feedback);
+                setRedrawing(false);
+              }}
+              className="rounded border-2 border-ink bg-zap px-3 py-1.5 text-sm font-bold text-white"
+            >
+              Redraw (about {ESTIMATES.picture} sec)
+            </button>
+            <button type="button" onClick={() => setRedrawing(false)} className="rounded border-2 border-ink bg-white px-3 py-1.5 text-sm font-bold">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       <figcaption className="flex items-center justify-between px-1 text-sm text-neutral-600">
-        <span>{label}</span>
+        <span>
+          {label}
+          {onRedraw && allReady && (
+            <button type="button" onClick={() => setRedrawing(true)} className="ml-3 font-bold underline hover:text-ink">
+              ✏️ Redraw
+            </button>
+          )}
+        </span>
         {allReady && onSave && (
           <button type="button" onClick={onSave} className="font-bold underline hover:text-ink">
             Save as image

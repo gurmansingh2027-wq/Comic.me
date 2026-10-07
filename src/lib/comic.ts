@@ -129,6 +129,8 @@ export type Comic = {
   cast?: CastMember[];
   status: ComicStatus;
   stage?: ComicStage;
+  /** How many single pictures the user has asked us to redraw (for limits and pricing later). */
+  redraws?: number;
   error?: string;
   script?: ComicScript;
 };

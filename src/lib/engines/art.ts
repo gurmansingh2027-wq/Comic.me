@@ -32,8 +32,18 @@ export type CastRef = { name: string; description: string; designPath: string; i
 
 export type ArtJob = { prompt: string; size: string; references: string[] };
 
+/** Redrawing one picture: the current version plus what the user wants changed. */
+export type Revision = { currentPath: string; feedback: string };
+
+function revisionNotes(revision: Revision | undefined): string | false {
+  return (
+    !!revision &&
+    `This is a redraw. Reference image 1 is the current version of this picture. Redraw it with this change requested by the reader (the most important instruction; apply it clearly): ${revision.feedback.trim() || "a better, more striking version of the same moment"}. Keep everything the change doesn't affect: the same moment, characters, setting, colours and art style.`
+  );
+}
+
 /** Character notes for the prompt, plus which design pictures to send as references. */
-function castFor(script: ComicScript, text: string, castRefs: CastRef[]): { notes: string | false; references: string[] } {
+function castFor(script: ComicScript, text: string, castRefs: CastRef[], offset = 0): { notes: string | false; references: string[] } {
   const names = [...script.characters.map((c) => c.name), ...castRefs.map((c) => c.name)];
   const priority = { main: 0, supporting: 1, minor: 2 };
   const designed = castRefs.filter((ref) => mentionsCharacter(text, ref.name, names))
@@ -46,7 +56,7 @@ function castFor(script: ComicScript, text: string, castRefs: CastRef[]): { note
   const lines = [
     ...designed.map(
       (ref, i) =>
-        `- ${ref.name}: reference image ${i + 1} is their character design. Draw them exactly like it (face, hair, build, outfit, colours). ${ref.description}`,
+        `- ${ref.name}: reference image ${i + 1 + offset} is their character design. Draw them exactly like it (face, hair, build, outfit, colours). ${ref.description}`,
     ),
     ...others.map((character) => `- ${character.name}: ${character.appearance}`),
   ];
@@ -56,10 +66,11 @@ function castFor(script: ComicScript, text: string, castRefs: CastRef[]): { note
   };
 }
 
-export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastRef[] = []): ArtJob {
+export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastRef[] = [], revision?: Revision): ArtJob {
   const scene = script.cover?.scene ?? script.pages[0].panels[0].scene;
-  const cast = castFor(script, scene, castRefs);
+  const cast = castFor(script, scene, castRefs, revision ? 1 : 0);
   const prompt = [
+    revisionNotes(revision),
     "The front cover illustration of a comic book, portrait format.",
     `Art style: ${style.art}`,
     `Cover image: ${scene}`,
@@ -69,7 +80,7 @@ export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastR
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { prompt, size: COVER_SIZE, references: cast.references };
+  return { prompt, size: COVER_SIZE, references: [...(revision ? [revision.currentPath] : []), ...cast.references] };
 }
 
 export function panelJob(
@@ -78,6 +89,7 @@ export function panelJob(
   panelIndex: number,
   style: ComicStyle,
   castRefs: CastRef[] = [],
+  revision?: Revision,
 ): ArtJob {
   const page = script.pages[pageIndex];
   const panel = page.panels[panelIndex];
@@ -88,9 +100,10 @@ export function panelJob(
     ([speaker, side]) => `${speaker} is on the ${side} side of the frame.`,
   );
   const hasLettering = panel.caption.trim() !== "" || panel.dialogue.length > 0;
-  const cast = castFor(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs);
+  const cast = castFor(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs, revision ? 1 : 0);
 
   const prompt = [
+    revisionNotes(revision),
     `A single comic book panel illustration: ${describeShape(aspect)}.`,
     `Art style: ${style.art}`,
     `Shot: ${panel.shot}.`,
@@ -104,7 +117,11 @@ export function panelJob(
     .filter(Boolean)
     .join("\n\n");
 
-  return { prompt, size: imageSizeForAspect(aspect), references: cast.references };
+  return {
+    prompt,
+    size: imageSizeForAspect(aspect),
+    references: [...(revision ? [revision.currentPath] : []), ...cast.references],
+  };
 }
 
 /** OpenAI client for images: gives up on a hung request after 5 minutes instead of waiting indefinitely. */

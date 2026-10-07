@@ -73,3 +73,34 @@ export async function approveStoryboard(id: string): Promise<void> {
     await saveComic({ ...comic, stage: "drawing" });
   });
 }
+
+const LetteringEdit = z.object({
+  pages: z.array(z.object({ panels: z.array(PanelSchema.pick({ caption: true, captionPos: true, dialogue: true })) })),
+});
+
+/**
+ * After drawing, only the lettering (captions and balloons: text, type, side and position) can
+ * change: it's drawn by our code on top of the art, so editing it is free and never redraws a panel.
+ */
+export async function saveLettering(id: string, input: unknown): Promise<ComicScript> {
+  const parsed = LetteringEdit.safeParse(input);
+  if (!parsed.success) throw new UserFacingError("Some text changes couldn't be saved. Refresh the page and try again.");
+  return withComicLock(id, async () => {
+    const comic = await loadComic(id);
+    if (!comic?.script || comic.status !== "ready") throw new UserFacingError("Comic not found.", 404);
+    const pages = comic.script.pages;
+    const edits = parsed.data.pages;
+    if (edits.length !== pages.length || edits.some((page, p) => page.panels.length !== pages[p].panels.length)) {
+      throw new UserFacingError("The comic changed. Refresh the page and try again.", 409);
+    }
+    const script: ComicScript = {
+      ...comic.script,
+      pages: pages.map((page, p) => ({
+        ...page,
+        panels: page.panels.map((panel, i) => ({ ...panel, ...edits[p].panels[i] })),
+      })),
+    };
+    await saveComic({ ...comic, script });
+    return script;
+  });
+}

@@ -38,7 +38,7 @@ function comicDir(id: string): string {
   return path.join(ROOT, id);
 }
 
-function imagePath(id: string, key: string): string {
+export function imagePath(id: string, key: string): string {
   if (!isValidImageKey(key)) throw new Error(`Invalid image key: ${key}`);
   return path.join(comicDir(id), `${key}.webp`);
 }
