@@ -3,11 +3,11 @@
 // screen and in downloads, so they always match.
 
 import { PDFDocument } from "pdf-lib";
-import type { ComicScript, DialogueLine, Page, Panel } from "../comic";
+import type { ComicScript, CoverFont, DialogueLine, LetterPos, Page, Panel } from "../comic";
 import { GRID_COLS, GRID_ROWS, LAYOUTS, type Rect } from "../layouts";
 import type { ComicStyle, LetteringFont, Lettering } from "../styles";
 
-export type RenderFonts = Record<"title" | LetteringFont, string>;
+export type RenderFonts = Record<"title" | LetteringFont, string> & { cover: Record<CoverFont, string> };
 
 /** Pages are 2:3 portrait (like a printed comic book), 1600×2400 pixels. */
 export const PAGE_W = 1600;
@@ -47,6 +47,7 @@ export async function ensureFontsLoaded(fonts: RenderFonts): Promise<void> {
     document.fonts.load(`700 30px ${fonts.comic}`),
     document.fonts.load(`30px ${fonts.hand}`),
     document.fonts.load(`30px ${fonts.typewriter}`),
+    ...Object.values(fonts.cover).map((family) => document.fonts.load(`900 120px ${family}`)),
   ]);
 }
 
@@ -113,10 +114,18 @@ function letterCase(text: string, font: LetteringFont): string {
 }
 
 type Placed =
-  | { type: "caption"; x: number; y: number; w: number; h: number; pad: number; block: TextBlock }
-  | { type: "balloon"; x: number; y: number; w: number; h: number; padX: number; padY: number; tail: number; line: DialogueLine; block: TextBlock; s: number };
+  | { type: "caption"; x: number; y: number; w: number; h: number; pad: number; block: TextBlock; pinned: boolean }
+  | { type: "balloon"; index: number; x: number; y: number; w: number; h: number; padX: number; padY: number; tail: number; line: DialogueLine; block: TextBlock; s: number; pinned: boolean };
 
-/** Positions the caption and balloons in reading order (top-left to bottom-right). */
+/** A placed caption or balloon in page pixels, for the storyboard editor's drag handles. */
+export type LetteringBox = { panel: number; ref: "caption" | number; x: number; y: number; w: number; h: number };
+
+const toPixels = (pos: LetterPos) => ({ x: pos.x * PAGE_W, y: pos.y * PAGE_H, w: pos.w * PAGE_W });
+
+/**
+ * Positions the caption and balloons in reading order (top-left to bottom-right).
+ * Anything the user dragged ("pinned") stays exactly where they put it.
+ */
 function layoutLettering(
   ctx: CanvasRenderingContext2D,
   panel: Panel,
@@ -139,55 +148,73 @@ function layoutLettering(
     Math.max(x < mid ? cursor.left : box.y + pad, x + w > mid ? cursor.right : box.y + pad, prevTop + 14 * s);
 
   if (panel.caption.trim()) {
-    const capPad = 14 * s;
-    const maxW = box.w < 720 ? box.w - pad * 2 - capPad * 2 : Math.min(box.w * 0.62, 820);
+    const pinned = panel.captionPos ? toPixels(panel.captionPos) : null;
+    const scale = pinned ? 1 : s;
+    const capPad = 14 * scale;
+    const maxW = pinned
+      ? Math.max(60, pinned.w - capPad * 2)
+      : box.w < 720
+        ? box.w - pad * 2 - capPad * 2
+        : Math.min(box.w * 0.62, 820);
     const block = textBlock(
       ctx,
       letterCase(panel.caption, lettering.captionFont),
       fonts[lettering.captionFont],
       lettering.captionFont === "comic" ? 700 : 400,
-      (lettering.captionFont === "comic" ? 26 : 30) * s,
+      (lettering.captionFont === "comic" ? 26 : 30) * scale,
       maxW,
     );
-    const w = block.width + capPad * 2;
+    const w = pinned ? pinned.w : block.width + capPad * 2;
     const h = block.height + capPad * 2;
-    const x = box.x + pad;
-    const y = box.y + pad;
-    items.push({ type: "caption", x, y, w, h, pad: capPad, block });
-    occupy(x, w, y + h + 12 * s);
-    prevTop = y;
+    const x = pinned ? pinned.x : box.x + pad;
+    const y = pinned ? pinned.y : box.y + pad;
+    items.push({ type: "caption", x, y, w, h, pad: capPad, block, pinned: !!pinned });
+    if (!pinned) {
+      occupy(x, w, y + h + 12 * s);
+      prevTop = y;
+    }
   }
 
   const sides = new Set(panel.dialogue.map((line) => line.side));
   const share = sides.size > 1 ? 0.46 : 0.62;
-  for (const line of panel.dialogue) {
-    const extra = line.kind === "shout" ? 16 * s : line.kind === "thought" ? 14 * s : 0;
-    const padX = 22 * s + extra;
-    const padY = 14 * s + extra;
-    const maxText = Math.max(Math.min(box.w * share, 640) - padX * 2, Math.min(200, box.w - pad * 2 - padX * 2));
+  panel.dialogue.forEach((line, index) => {
+    if (!line.text.trim()) return;
+    const pinned = line.pos ? toPixels(line.pos) : null;
+    const scale = pinned ? 1 : s;
+    const extra = line.kind === "shout" ? 16 * scale : line.kind === "thought" ? 14 * scale : 0;
+    const padX = 22 * scale + extra;
+    const padY = 14 * scale + extra;
+    const maxText = pinned
+      ? Math.max(60, pinned.w - padX * 2)
+      : Math.max(Math.min(box.w * share, 640) - padX * 2, Math.min(200, box.w - pad * 2 - padX * 2));
     const font = lettering.balloonFont;
     const block = textBlock(
       ctx,
       letterCase(line.text, font),
       fonts[font],
       font === "comic" ? 700 : 400,
-      (font === "comic" ? 28 : 33) * s,
+      (font === "comic" ? 28 : 33) * scale,
       maxText,
     );
-    const w = block.width + padX * 2;
+    const w = pinned ? pinned.w : block.width + padX * 2;
     const h = block.height + padY * 2;
-    const tail = 34 * s;
+    const tail = 34 * scale;
+    if (pinned) {
+      items.push({ type: "balloon", index, x: pinned.x, y: pinned.y, w, h, padX, padY, tail, line, block, s: scale, pinned: true });
+      return;
+    }
     const x = line.side === "left" ? box.x + pad : box.x + box.w - pad - w;
     let y = topFor(x, w);
     // A reply to the left of the previous balloon must sit clearly lower, or it would be read first.
-    const prev = items.at(-1);
+    const prev = [...items].reverse().find((item) => !item.pinned);
     if (prev?.type === "balloon" && prev.x > x) y = Math.max(y, prev.y + prev.h * 0.75);
-    items.push({ type: "balloon", x, y, w, h, padX, padY, tail, line, block, s });
+    items.push({ type: "balloon", index, x, y, w, h, padX, padY, tail, line, block, s, pinned: false });
     occupy(x, w, y + h + tail + 6 * s);
     prevTop = y;
-  }
+  });
 
-  const bottom = Math.max(box.y, ...items.map((item) => item.y + item.h + (item.type === "balloon" ? item.tail : 0)));
+  const auto = items.filter((item) => !item.pinned);
+  const bottom = Math.max(box.y, ...auto.map((item) => item.y + item.h + (item.type === "balloon" ? item.tail : 0)));
   return { items, bottom };
 }
 
@@ -300,15 +327,18 @@ function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type
   drawTextLines(ctx, item.block, x + w / 2, y + item.padY, "center");
 }
 
-function letterPanel(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, lettering: Lettering, fonts: RenderFonts) {
-  // Shrink the lettering a little if it would cover too much of a small panel.
+/** Lays out one panel's lettering, shrinking it a little if it would cover too much of a small panel. */
+function panelLettering(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, lettering: Lettering, fonts: RenderFonts): Placed[] {
   let layout = layoutLettering(ctx, panel, box, lettering, fonts, 1);
   for (const s of [0.88, 0.78, 0.7]) {
     if (layout.bottom - box.y <= box.h * 0.6) break;
     layout = layoutLettering(ctx, panel, box, lettering, fonts, s);
   }
+  return layout.items;
+}
 
-  for (const item of layout.items) {
+function drawLettering(ctx: CanvasRenderingContext2D, items: Placed[], lettering: Lettering) {
+  for (const item of items) {
     if (item.type === "caption") {
       ctx.fillStyle = lettering.captionFill;
       ctx.strokeStyle = lettering.captionInk;
@@ -323,6 +353,124 @@ function letterPanel(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, lett
   }
 }
 
+/** Where every caption and balloon on a page ends up, in page pixels (for drag handles). */
+export function letteringBoxes(ctx: CanvasRenderingContext2D, page: Page, style: ComicStyle, fonts: RenderFonts): LetteringBox[] {
+  return pageBoxes(page).flatMap((box, panel) =>
+    page.panels[panel]
+      ? panelLettering(ctx, page.panels[panel], box, style.lettering, fonts).map((item) => ({
+          panel,
+          ref: item.type === "caption" ? ("caption" as const) : item.index,
+          x: item.x,
+          y: item.y,
+          w: item.w,
+          h: item.h + (item.type === "balloon" ? item.tail : 0),
+        }))
+      : [],
+  );
+}
+
+// --- Storyboard wireframes ----------------------------------------------------------------------
+
+/** A quick stick-figure sketch of a panel, drawn by code (free and instant), for the storyboard. */
+function drawWireframe(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, names: string[], fonts: RenderFonts) {
+  const ink = "#9a9488";
+  ctx.fillStyle = "#fbfaf7";
+  ctx.fillRect(box.x, box.y, box.w, box.h);
+  ctx.strokeStyle = ink;
+  ctx.fillStyle = ink;
+  ctx.lineCap = "round";
+
+  const lower = (text: string) => text.toLowerCase();
+  const inScene = names.filter((name) => {
+    const first = lower(name.split(/\s+/)[0]);
+    return lower(panel.scene).includes(lower(name)) || (first.length >= 3 && lower(panel.scene).includes(first));
+  });
+  const speakers = [...new Map(panel.dialogue.map((line) => [line.speaker, line.side])).entries()];
+  const figures: { name: string; side: "left" | "right" | "middle" }[] = [
+    ...speakers.map(([name, side]) => ({ name, side })),
+    ...inScene.filter((name) => !speakers.some(([speaker]) => speaker === name)).map((name) => ({ name, side: "middle" as const })),
+  ].slice(0, 4);
+
+  // Shot type sets how big the figures are (closer shots crop below the frame) and whether we see the horizon.
+  const framing = {
+    establishing: { height: 0.3, ground: 0.84 },
+    wide: { height: 0.5, ground: 0.88 },
+    medium: { height: 0.95, ground: 1.25 },
+    "close-up": { height: 1.6, ground: 1.9 },
+    "extreme close-up": { height: 2.6, ground: 2.9 },
+  }[panel.shot] ?? { height: 0.6, ground: 0.9 };
+  const height = box.h * framing.height;
+  const groundY = box.y + box.h * framing.ground;
+  ctx.lineWidth = 3;
+  if (panel.shot === "establishing" || panel.shot === "wide") {
+    ctx.beginPath();
+    ctx.moveTo(box.x, groundY);
+    ctx.lineTo(box.x + box.w, groundY);
+    ctx.stroke();
+    if (panel.shot === "establishing") {
+      // A simple skyline so the setting reads as a place.
+      ctx.globalAlpha = 0.5;
+      let x = box.x + 10;
+      for (let i = 0; x < box.x + box.w - 20; i++) {
+        const w = box.w * (0.07 + ((i * 37) % 5) * 0.015);
+        const h = box.h * (0.12 + ((i * 53) % 7) * 0.035);
+        ctx.strokeRect(x, groundY - h, w, h);
+        x += w + box.w * 0.02;
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Spread figures evenly: people on the left, then the middle, then the right.
+  const order = { left: 0, middle: 1, right: 2 } as const;
+  const placed = [...figures].sort((a, b) => order[a.side] - order[b.side]);
+  placed.forEach((figure, i) => {
+    const cx = box.x + box.w * (placed.length === 1 ? (figure.side === "left" ? 0.3 : figure.side === "right" ? 0.7 : 0.5) : 0.18 + (0.64 * i) / (placed.length - 1));
+    const head = height * 0.11;
+    const top = groundY - height;
+    ctx.lineWidth = Math.max(3, height * 0.018);
+    ctx.beginPath();
+    ctx.arc(cx, top + head, head, 0, Math.PI * 2);
+    ctx.stroke();
+    const neck = top + head * 2;
+    const hip = top + height * 0.58;
+    const reach = Math.min(height * 0.16, (box.w / Math.max(placed.length, 1)) * 0.35);
+    ctx.beginPath();
+    ctx.moveTo(cx, neck);
+    ctx.lineTo(cx, hip);
+    ctx.moveTo(cx - reach, neck + height * 0.12);
+    ctx.lineTo(cx, neck + height * 0.06);
+    ctx.lineTo(cx + reach, neck + height * 0.12);
+    ctx.moveTo(cx - reach * 0.75, groundY);
+    ctx.lineTo(cx, hip);
+    ctx.lineTo(cx + reach * 0.75, groundY);
+    ctx.stroke();
+    // Name inside the head (or just below it if the head is small).
+    const size = Math.max(16, Math.min(30, head * 0.55));
+    ctx.font = `700 ${size}px ${fonts.comic}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const labelY = head > size * 1.4 ? top + head : top + head * 2 + size;
+    ctx.fillText(figure.name.split(/\s+/)[0].toUpperCase(), cx, Math.min(box.y + box.h - 40, labelY));
+  });
+
+  // What the artist will draw, so the user can read the plan.
+  if (panel.scene.trim()) {
+    ctx.font = `italic 400 20px ${fonts.comic}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    const lines = wrapText(ctx, `🎬 ${panel.scene}`, box.w - 32).slice(0, 2);
+    if (wrapText(ctx, `🎬 ${panel.scene}`, box.w - 32).length > 2) lines[1] = `${lines[1].replace(/\s+\S*$/, "")}…`;
+    ctx.fillStyle = "#6b665c";
+    lines.forEach((line, i) => ctx.fillText(line, box.x + 16, box.y + box.h - 12 - (lines.length - 1 - i) * 24));
+  }
+  ctx.font = `700 22px ${fonts.comic}`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#6b665c";
+  ctx.fillText(panel.shot.toUpperCase(), box.x + box.w - 14, box.y + 10);
+}
+
 // --- Pages ------------------------------------------------------------------------------------
 
 export function createPageCanvas(): HTMLCanvasElement {
@@ -332,7 +480,10 @@ export function createPageCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
-/** Draws one comic page. Panels whose art isn't ready yet are drawn as blank boxes (lettering still shows). */
+/**
+ * Draws one comic page. Panels whose art isn't ready yet are drawn as blank boxes (lettering
+ * still shows). In storyboard mode every panel is a stick-figure wireframe instead.
+ */
 export function drawPage(
   ctx: CanvasRenderingContext2D,
   page: Page,
@@ -340,13 +491,16 @@ export function drawPage(
   images: (HTMLImageElement | null)[],
   style: ComicStyle,
   fonts: RenderFonts,
+  options: { wireframe?: { names: string[] } } = {},
 ): void {
   const { lettering } = style;
-  const dark = isDark(lettering.pageColor);
-  ctx.fillStyle = lettering.pageColor;
+  const dark = !options.wireframe && isDark(lettering.pageColor);
+  ctx.fillStyle = options.wireframe ? "#ffffff" : lettering.pageColor;
   ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+  const boxes = pageBoxes(page);
 
-  pageBoxes(page).forEach((box, i) => {
+  // Pass 1: artwork, clipped to each panel.
+  boxes.forEach((box, i) => {
     const panel = page.panels[i];
     if (!panel) return;
     ctx.save();
@@ -354,18 +508,24 @@ export function drawPage(
     ctx.rect(box.x, box.y, box.w, box.h);
     ctx.clip();
     const image = images[i];
-    if (image) {
+    if (options.wireframe) {
+      drawWireframe(ctx, panel, box, options.wireframe.names, fonts);
+    } else if (image) {
       drawCoverFit(ctx, image, box);
     } else {
       ctx.fillStyle = dark ? "#262626" : "#ece8df";
       ctx.fillRect(box.x, box.y, box.w, box.h);
     }
-    letterPanel(ctx, panel, box, lettering, fonts);
     ctx.restore();
-
     ctx.strokeStyle = dark ? "#e5e5e5" : "#111111";
-    ctx.lineWidth = 5;
+    ctx.lineWidth = options.wireframe ? 3 : 5;
     ctx.strokeRect(box.x, box.y, box.w, box.h);
+  });
+
+  // Pass 2: lettering on top of everything, so a balloon the user moved can cross a panel border.
+  boxes.forEach((box, i) => {
+    const panel = page.panels[i];
+    if (panel) drawLettering(ctx, panelLettering(ctx, panel, box, lettering, fonts), lettering);
   });
 
   ctx.fillStyle = dark ? "#a3a3a3" : "#555555";
@@ -403,44 +563,75 @@ export function drawCover(
   ctx.textBaseline = "middle";
   ctx.fillText("COMIC.ME", 56 + 125, 56 + 40);
 
+  const design = script.cover?.design;
+  const family = design ? fonts.cover[design.titleFont] : fonts.title;
+  const weight = design && ["playfair", "cinzel"].includes(design.titleFont) ? 900 : 400;
+  const keepCase = design?.titleFont === "playfair";
+  const fill = design?.titleFill ?? "#facc15";
+  const outline = design?.titleOutline ?? "#111111";
+  const atBottom = design?.titlePosition === "bottom";
+
   // Title: as big as fits, up to three lines.
-  const title = script.title.toUpperCase();
+  const title = keepCase ? script.title : script.title.toUpperCase();
   let size = 230;
   let lines: string[] = [];
   for (; size >= 90; size -= 10) {
-    ctx.font = `${size}px ${fonts.title}`;
+    ctx.font = `${weight} ${size}px ${family}`;
     lines = wrapText(ctx, title, PAGE_W - 160);
     if (lines.length <= 3 && lines.every((l) => ctx.measureText(l).width <= PAGE_W - 160)) break;
   }
+  const lineHeight = size * 0.98;
+  const blockHeight = lines.length * lineHeight;
+  const titleTop = atBottom ? PAGE_H - 130 - blockHeight : 175;
+  ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
   lines.forEach((line, i) => {
-    const y = 180 + i * size * 0.95;
-    ctx.fillStyle = "#111111";
-    ctx.fillText(line, PAGE_W / 2 + 10, y + 10);
-    ctx.strokeStyle = "#111111";
-    ctx.lineWidth = size * 0.09;
+    const y = titleTop + i * lineHeight;
+    // Soft drop shadow, a bold outline, then the fill: reads over any artwork.
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = size * 0.12;
+    ctx.shadowOffsetY = size * 0.04;
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = size * (design ? 0.07 : 0.09);
     ctx.strokeText(line, PAGE_W / 2, y);
-    ctx.fillStyle = "#facc15";
+    ctx.restore();
+    ctx.fillStyle = fill;
     ctx.fillText(line, PAGE_W / 2, y);
   });
 
-  // Tagline box near the bottom.
-  if (script.tagline.trim()) {
-    const block = textBlock(ctx, script.tagline.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
-    const pad = 24;
-    const w = block.width + pad * 2;
-    const h = block.height + pad * 2;
-    const x = (PAGE_W - w) / 2;
-    const y = PAGE_H - 120 - h;
-    ctx.fillStyle = style.lettering.captionFill;
-    ctx.strokeStyle = style.lettering.captionInk;
-    ctx.lineWidth = 5;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeRect(x, y, w, h);
-    ctx.fillStyle = style.lettering.captionInk;
-    drawTextLines(ctx, block, PAGE_W / 2, y + pad, "center");
+  if (!script.tagline.trim()) return;
+  if (design) {
+    // An understated tagline, like a film poster: just above the title at the bottom, or at the foot of the page.
+    ctx.font = `700 40px ${fonts.comic}`;
+    const taglineLines = wrapText(ctx, script.tagline.toUpperCase(), PAGE_W - 300);
+    const taglineTop = atBottom ? titleTop - 30 - taglineLines.length * 48 : PAGE_H - 110 - taglineLines.length * 48;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    taglineLines.forEach((line, i) => ctx.fillText(line, PAGE_W / 2, taglineTop + i * 48));
+    ctx.restore();
+    return;
   }
+
+  // Tagline box near the bottom (comics made before cover designs existed).
+  const block = textBlock(ctx, script.tagline.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
+  const pad = 24;
+  const w = block.width + pad * 2;
+  const h = block.height + pad * 2;
+  const x = (PAGE_W - w) / 2;
+  const y = PAGE_H - 120 - h;
+  ctx.fillStyle = style.lettering.captionFill;
+  ctx.strokeStyle = style.lettering.captionInk;
+  ctx.lineWidth = 5;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = style.lettering.captionInk;
+  drawTextLines(ctx, block, PAGE_W / 2, y + pad, "center");
 }
 
 // --- Downloads --------------------------------------------------------------------------------

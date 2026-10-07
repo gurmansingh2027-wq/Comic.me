@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { z } from "zod";
 import { castReady, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, type CastActivity, type CastMember, type CastState, type Comic } from "./comic";
+import { addCost } from "./costs";
 import { checkPhotos, describeDesign, drawDesign, planCast } from "./engines/characters";
 import { UserFacingError } from "./errors";
 import { castFilePath, loadCastFile, loadComic, saveCastFile, saveComic, withComicLock } from "./storage";
@@ -93,6 +94,7 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
   }
   async function check(comic: Comic, member: CastMember) {
     member.photoCheck = await deps.checkPhotos(member, await photoBytes(comic, member));
+    addCost(comic, "photo-check", member.name);
     await deps.saveComic(comic);
   }
   async function locked(id: string, taskActivity: CastActivity, task: (comic: Comic) => Promise<void>): Promise<CastState> {
@@ -114,6 +116,7 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
       if (command.action === "initialize") {
         if (comic.cast !== undefined) return;
         const planned = await deps.planCast(comic.story, comic.intake);
+        addCost(comic, "cast");
         comic.cast = [];
         for (const person of planned.slice(0, MAX_CAST_MEMBERS)) {
           const fields = Fields.parse({ ...person, source: "ai" });
@@ -171,6 +174,7 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
           await deps.saveCastFile(id, file, image);
           member.design = { file, approved: false };
           member.designAttempts++;
+          addCost(comic, "character-design", member.name);
           member.lastDesignRequestId = command.requestId;
           break;
         }
@@ -180,6 +184,7 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
           const image = await deps.loadCastFile(id, command.file);
           if (!image) throw new UserFacingError("The design is missing. Please generate it again.");
           member.description = await deps.describeDesign(member, image);
+          addCost(comic, "design-description", member.name);
           member.design.approved = true;
           member.design.needsRedraw = false;
           break;

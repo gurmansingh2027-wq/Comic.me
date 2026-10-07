@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CastCommand } from "@/lib/cast-service";
 import { castFileUrl, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, needsDesign, type CastMember, type CastState } from "@/lib/comic";
 import { getStyle } from "@/lib/styles";
+import Countdown, { ESTIMATES } from "./Countdown";
 import Stepper from "./Stepper";
 
 type Fields = Pick<CastMember, "name" | "role" | "description" | "importance" | "source">;
@@ -26,6 +27,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
   const [adding, setAdding] = useState(false);
   const [starting, setStarting] = useState(false);
   const [unsaved, setUnsaved] = useState<string[]>([]);
+  const [castStartedAt] = useState(() => Date.now());
   const pendingRef = useRef(false);
   const mounted = useRef(true);
   const endpoint = `/api/comics/${comicId}/cast`;
@@ -70,8 +72,8 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
     return () => clearInterval(timer);
   }, [state.activity, endpoint, comicId, router]);
 
-  async function act(body: CastCommand | FormData): Promise<boolean> {
-    if (pendingRef.current) return false;
+  async function act(body: CastCommand | FormData): Promise<CastState | null> {
+    if (pendingRef.current) return null;
     pendingRef.current = true;
     setPending(true);
     setError(null);
@@ -82,14 +84,14 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
         body: form ? body : JSON.stringify(body),
       }));
       if (mounted.current) setState(updated);
-      return true;
+      return updated;
     } catch (err) {
       if (mounted.current) {
         setError((err as Error).message);
         // A photo check may have succeeded even if drawing failed afterwards.
         try { setState(await responseData<CastState>(await fetch(endpoint, { cache: "no-store" }))); } catch { /* retain current state */ }
       }
-      return false;
+      return null;
     } finally {
       pendingRef.current = false;
       if (mounted.current) setPending(false);
@@ -126,7 +128,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
       {state.cast === null ? (
         <section className="comic-box space-y-4 bg-white p-8 text-center" aria-busy={initializing || busy}>
           <h2 className="font-title text-3xl">{initializing || busy ? "Finding the people in your story…" : "Let's find your cast"}</h2>
-          <p className="text-neutral-600">This usually takes a few moments.</p>
+          {(initializing || busy) && <p className="text-neutral-600">Reading your story: <Countdown startedAt={castStartedAt} seconds={ESTIMATES.findCast} /></p>}
           {!initializing && !busy && <button className={button} onClick={() => act({ action: "initialize" })}>Try again</button>}
         </section>
       ) : (
@@ -147,7 +149,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
             <p className="font-bold">{state.ready ? "Your cast is ready." : "Approve every main and supporting character to continue."}</p>
             {(unsaved.length > 0 || adding) && <p className="text-sm text-neutral-600">Save or cancel your character edits before continuing.</p>}
             <button className="comic-box bg-zap px-8 py-3 font-title text-3xl tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={busy || !state.ready || unsaved.length > 0 || adding} onClick={startComic}>
-              {starting ? "Starting your comic…" : "Make my comic →"}
+              {starting ? "Starting…" : "Write my storyboard →"}
             </button>
           </section>
         </>
@@ -156,16 +158,19 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
   );
 }
 
-type Action = (command: CastCommand | FormData) => Promise<boolean>;
+type Action = (command: CastCommand | FormData) => Promise<CastState | null>;
+type Working = { label: string; startedAt: number; seconds: number };
+
 function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { member: CastMember; comicId: string; busy: boolean; act: Action; onDirty: (id: string, dirty: boolean) => void; onError: (error: string | null) => void }) {
   const original: Fields = { name: member.name, role: member.role, description: member.description, importance: member.importance, source: member.source };
   const [fields, setFields] = useState(original);
   const [feedback, setFeedback] = useState("");
-  const [working, setWorking] = useState<string | null>(null);
+  const [working, setWorking] = useState<Working | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const designRequest = useRef<Extract<CastCommand, { action: "design" }> | null>(null);
   const dirty = JSON.stringify(fields) !== JSON.stringify(original);
   const remaining = MAX_DESIGN_ATTEMPTS - member.designAttempts;
+  const awaitingApproval = !!member.design && !member.design.approved && !member.design.needsRedraw;
 
   function update(patch: Partial<Fields>) {
     const next = { ...fields, ...patch };
@@ -173,15 +178,29 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
     onDirty(member.id, JSON.stringify(next) !== JSON.stringify(original));
     designRequest.current = null;
   }
-  async function perform(label: string, command: CastCommand | FormData) {
-    setWorking(label);
-    const ok = await act(command);
+  async function perform(label: string, seconds: number, command: CastCommand | FormData) {
+    setWorking({ label, startedAt: Date.now(), seconds });
+    const result = await act(command);
     setWorking(null);
-    return ok;
+    return result;
   }
   async function save() {
-    if (await perform("Saving details…", { action: "update", memberId: member.id, changes: fields })) onDirty(member.id, false);
+    if (await perform("Saving details…", 5, { action: "update", memberId: member.id, changes: fields })) onDirty(member.id, false);
   }
+  /** Switching between photos and AI applies straight away, so the photo upload appears immediately. */
+  async function switchSource(source: Fields["source"]) {
+    if (await perform("Saving…", 5, { action: "update", memberId: member.id, changes: { ...fields, source } })) onDirty(member.id, false);
+  }
+  async function design(current: CastMember = member, note = feedback.trim()) {
+    // Reuse the same request id when retrying, so a lost response never pays for a second drawing.
+    let request = designRequest.current;
+    if (!request || request.expectedDesign !== current.design?.file || request.feedback !== note) {
+      request = { action: "design", memberId: current.id, requestId: crypto.randomUUID(), expectedDesign: current.design?.file, feedback: note };
+      designRequest.current = request;
+    }
+    if (await perform("Drawing your character", ESTIMATES.characterDesign, request)) { designRequest.current = null; setFeedback(""); }
+  }
+  /** Upload → the AI checks the photos → if they're usable, it designs the character straight away. */
   async function upload(files: FileList | null) {
     if (!files?.length) return;
     if (member.photos.length + files.length > MAX_PHOTOS_PER_CHARACTER) { onError("Upload at most four photos per character."); return; }
@@ -189,82 +208,86 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
     const form = new FormData();
     form.append("memberId", member.id);
     for (const file of files) form.append("photos", file);
-    await perform("Saving photos…", form);
     designRequest.current = null;
-  }
-  async function design() {
-    // Reuse the same request id when retrying, so a lost response never pays for a second drawing.
-    let request = designRequest.current;
-    if (!request || request.expectedDesign !== member.design?.file || request.feedback !== feedback.trim()) {
-      request = { action: "design", memberId: member.id, requestId: crypto.randomUUID(), expectedDesign: member.design?.file, feedback: feedback.trim() };
-      designRequest.current = request;
+    if (!(await perform("Saving your photos", 10, form))) return;
+    const checked = await perform("Checking your photos", ESTIMATES.photoCheck, { action: "check-photos", memberId: member.id });
+    const after = checked?.cast?.find((m) => m.id === member.id);
+    if (after?.photoCheck && after.photoCheck.verdict !== "unusable" && after.designAttempts < MAX_DESIGN_ATTEMPTS) {
+      await design(after, "");
     }
-    if (await perform("Drawing your character… (about a minute)", request)) { designRequest.current = null; setFeedback(""); }
   }
 
   return (
-    <section className="comic-box space-y-4 bg-white p-5" aria-label={`${member.name}, character`} aria-busy={!!working}>
+    <section className={`comic-box space-y-4 bg-white p-5 ${awaitingApproval ? "ring-4 ring-pop" : ""}`} aria-label={`${member.name}, character`} aria-busy={!!working}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-title text-3xl tracking-wide">{member.name}</h2>
-        <span className={`rounded-full border-2 px-3 py-1 text-xs font-bold ${member.design?.approved ? "border-green-700 bg-green-50 text-green-800" : "border-ink bg-paper"}`}>{member.design?.approved ? "✓ Approved" : needsDesign(member) ? "Design needed" : "Description is enough"}</span>
+        <span className={`rounded-full border-2 px-3 py-1 text-xs font-bold ${member.design?.approved ? "border-green-700 bg-green-50 text-green-800" : awaitingApproval ? "border-ink bg-pop" : "border-ink bg-paper"}`}>{member.design?.approved ? "✓ Approved" : awaitingApproval ? "Waiting for your approval" : needsDesign(member) ? "Design needed" : "Description is enough"}</span>
       </div>
-      <CharacterFields fields={fields} update={update} disabled={busy} id={member.id} />
+      <CharacterFields fields={fields} update={update} onSourceChange={switchSource} disabled={busy} id={member.id} />
       {dirty && <div className="flex flex-wrap items-center gap-2">
         <button className={button} disabled={busy || !fields.name.trim() || !fields.role.trim() || !fields.description.trim()} onClick={save}>Save details</button>
         <button className={button} disabled={busy} onClick={() => { setFields(original); onDirty(member.id, false); }}>Cancel edits</button>
         <p className="text-xs text-neutral-600">Appearance or reference changes need approval again.</p>
       </div>}
 
-      {member.source === "photos" && <div className="space-y-3 rounded border-2 border-neutral-300 bg-paper p-3">
-        <p className="text-sm">Use clear photos of one person, with their face visible. Up to four JPEG, PNG or WebP photos, under 10 MB each.</p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {member.source === "photos" && <div className="space-y-3 rounded border-2 border-ink bg-paper p-4">
+        <p className="text-sm font-bold">📷 Upload 1–4 clear photos of {member.name}, with their face visible. We&apos;ll check them and then design the character for you.</p>
+        {member.photos.length > 0 && <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {member.photos.map((file, i) => <div key={file} className="space-y-1">
             {/* eslint-disable-next-line @next/next/no-img-element -- private local reference photo */}
             <img src={castFileUrl(comicId, file)} alt={`${member.name}, reference photo ${i + 1}`} className="aspect-square w-full rounded border-2 border-ink object-cover" />
-            <button className="text-xs font-bold underline disabled:opacity-50" disabled={busy || dirty} onClick={() => perform("Removing photo…", { action: "remove-photo", memberId: member.id, file })}>Remove photo {i + 1}</button>
+            <button className="text-xs font-bold underline disabled:opacity-50" disabled={busy || dirty} onClick={() => perform("Removing photo…", 5, { action: "remove-photo", memberId: member.id, file })}>Remove photo {i + 1}</button>
           </div>)}
-        </div>
-        <label className="block space-y-1 text-sm font-bold">
-          <span>Add photos ({member.photos.length}/4)</span>
-          <input type="file" multiple accept="image/jpeg,image/png,image/webp" disabled={busy || dirty || member.photos.length >= MAX_PHOTOS_PER_CHARACTER} onChange={(event) => { void upload(event.target.files); event.target.value = ""; }} className="block w-full text-sm file:mr-3 file:rounded file:border-2 file:border-ink file:bg-white file:px-3 file:py-2 file:font-bold disabled:opacity-50" />
-        </label>
-        {member.photos.length > 0 && <button className={button} disabled={busy || dirty} onClick={() => perform("Checking photos…", { action: "check-photos", memberId: member.id })}>{member.photoCheck ? "Check photos again" : "Check my photos"}</button>}
+        </div>}
+        {member.photos.length < MAX_PHOTOS_PER_CHARACTER && <label className={`inline-flex cursor-pointer items-center gap-2 rounded border-2 border-ink bg-pop px-4 py-2 font-bold shadow-[3px_3px_0_#111] hover:-translate-y-0.5 ${busy || dirty ? "pointer-events-none opacity-50" : ""}`}>
+          {member.photos.length === 0 ? "📷 Upload photos" : "📷 Add more photos"} ({member.photos.length}/{MAX_PHOTOS_PER_CHARACTER})
+          <input type="file" multiple accept="image/jpeg,image/png,image/webp" disabled={busy || dirty} onChange={(event) => { void upload(event.target.files); event.target.value = ""; }} className="sr-only" />
+        </label>}
+        <p className="text-xs text-neutral-600">JPEG, PNG or WebP, under 10 MB each. Photos are only used to draw this character.</p>
+        {member.photos.length > 0 && !working && <button className="text-sm font-bold underline disabled:opacity-50" disabled={busy || dirty} onClick={() => perform("Checking your photos", ESTIMATES.photoCheck, { action: "check-photos", memberId: member.id })}>{member.photoCheck ? "Check photos again" : "Check my photos"}</button>}
         {member.photoCheck && <p role="status" className={`rounded border-2 p-3 text-sm ${member.photoCheck.verdict === "unusable" ? "border-zap bg-red-50" : member.photoCheck.verdict === "need-more" ? "border-amber-700 bg-amber-50" : "border-green-700 bg-green-50"}`}>{member.photoCheck.message}{member.photoCheck.verdict === "need-more" && <span className="mt-1 block font-bold">You can continue with these photos.</span>}</p>}
       </div>}
+
+      {working && <p role="status" className="flex flex-wrap items-center gap-2 rounded border-2 border-ink bg-pop p-3 text-sm font-bold">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-ink border-t-white" />
+        {working.label}… <Countdown startedAt={working.startedAt} seconds={working.seconds} className="font-normal" />
+      </p>}
 
       {(needsDesign(member) || member.design) && <div className="space-y-3 border-t-2 border-ink pt-4">
         {member.design && <>
           {/* eslint-disable-next-line @next/next/no-img-element -- generated private design sheet */}
-          <img src={castFileUrl(comicId, member.design.file)} alt={`Character design for ${member.name}`} className="aspect-[3/2] w-full rounded border-2 border-ink bg-paper object-contain" />
-          {!member.design.approved && <button className={`${button} bg-pop`} disabled={busy || dirty} onClick={() => perform("Approving this look…", { action: "approve", memberId: member.id, file: member.design!.file })}>✓ Approve this look</button>}
+          <img src={castFileUrl(comicId, member.design.file)} alt={`Character design for ${member.name}`} className={`aspect-[3/2] w-full rounded border-2 border-ink bg-paper object-contain ${member.design.needsRedraw ? "opacity-50" : ""}`} />
+          {member.design.needsRedraw && <p className="text-sm font-bold">The details changed since this design. Draw a new one to approve it.</p>}
+          {awaitingApproval && <div className="space-y-2 rounded border-3 border-ink bg-pop p-4 text-center">
+            <p className="font-bold">Happy with how {member.name} looks?</p>
+            <button className="comic-box w-full animate-pulse bg-zap px-6 py-3 font-title text-2xl tracking-wide text-white hover:animate-none disabled:animate-none disabled:opacity-50" disabled={busy || dirty} onClick={() => perform("Approving this look", ESTIMATES.approve, { action: "approve", memberId: member.id, file: member.design!.file })}>✓ Approve this look</button>
+            <p className="text-xs">Or describe a change below and draw a revised look.</p>
+          </div>}
           {remaining > 0 && <label className="block space-y-1 text-sm font-bold">
             <span>What should change?</span>
             <textarea value={feedback} onChange={(event) => { setFeedback(event.target.value); designRequest.current = null; }} maxLength={1500} rows={2} placeholder="For example: round glasses and a blue jacket" disabled={busy || dirty} className={input} />
           </label>}
         </>}
-        {remaining > 0 && <button className={button} disabled={busy || dirty || (member.source === "photos" && (member.photos.length === 0 || member.photoCheck?.verdict === "unusable"))} onClick={design}>{member.design ? "Draw a revised look" : "Design this character"}</button>}
-        <p className="text-xs text-neutral-600">{remaining > 0 ? `${remaining} of ${MAX_DESIGN_ATTEMPTS} designs remaining. Failed requests don't use an attempt.` : "All six designs used. You can still approve the current look."}</p>
+        {remaining > 0 && <button className={member.design ? button : `${button} bg-pop`} disabled={busy || dirty || (member.source === "photos" && (member.photos.length === 0 || member.photoCheck?.verdict === "unusable"))} onClick={() => design()}>{member.design ? "Draw a revised look" : member.source === "photos" ? "Design from my photos" : "✨ Design this character"}</button>}
+        <p className="text-xs text-neutral-600">{remaining > 0 ? `${remaining} of ${MAX_DESIGN_ATTEMPTS} designs remaining. A design takes about ${ESTIMATES.characterDesign} seconds. Failed requests don't use an attempt.` : "All six designs used. You can still approve the current look."}</p>
       </div>}
-      {working && <p role="status" className="rounded bg-pop p-2 text-sm font-bold">{working}</p>}
       {confirmRemove ? <div className="flex flex-wrap items-center gap-2 border-t-2 border-neutral-200 pt-3">
         <span className="text-sm">Remove {member.name} from the cast?</span>
-        <button className={button} disabled={busy} onClick={async () => { if (await perform("Removing character…", { action: "remove", memberId: member.id })) onDirty(member.id, false); }}>Remove</button>
+        <button className={button} disabled={busy} onClick={async () => { if (await perform("Removing character…", 5, { action: "remove", memberId: member.id })) onDirty(member.id, false); }}>Remove</button>
         <button className={button} disabled={busy} onClick={() => setConfirmRemove(false)}>Keep character</button>
       </div> : <button className="text-xs text-neutral-600 underline disabled:opacity-50" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove character</button>}
     </section>
   );
 }
 
-function CharacterFields({ fields, update, disabled, id }: { fields: Fields; update: (patch: Partial<Fields>) => void; disabled: boolean; id: string }) {
+function CharacterFields({ fields, update, onSourceChange, disabled, id }: { fields: Fields; update: (patch: Partial<Fields>) => void; onSourceChange?: (source: Fields["source"]) => void; disabled: boolean; id: string }) {
   return <fieldset disabled={disabled} className="space-y-3">
-    <div className="grid gap-3 sm:grid-cols-2">
-      <label className="space-y-1 text-sm font-bold" htmlFor={`${id}-name`}>Name<input id={`${id}-name`} value={fields.name} maxLength={100} onChange={(event) => update({ name: event.target.value })} className={input} /></label>
-      <label className="space-y-1 text-sm font-bold" htmlFor={`${id}-role`}>Role in the story<input id={`${id}-role`} value={fields.role} maxLength={200} onChange={(event) => update({ role: event.target.value })} className={input} /></label>
-    </div>
-    <label className="block space-y-1 text-sm font-bold" htmlFor={`${id}-description`}>Appearance<textarea id={`${id}-description`} value={fields.description} maxLength={2000} rows={3} onChange={(event) => update({ description: event.target.value })} className={input} /></label>
+    <label className="block space-y-1 text-sm font-bold" htmlFor={`${id}-name`}>Name<input id={`${id}-name`} value={fields.name} maxLength={100} onChange={(event) => update({ name: event.target.value })} className={input} /></label>
+    <label className="block space-y-1 text-sm font-bold" htmlFor={`${id}-role`}>Role in the story<textarea id={`${id}-role`} value={fields.role} maxLength={200} rows={2} onChange={(event) => update({ role: event.target.value })} className={`${input} resize-y`} /></label>
+    <label className="block space-y-1 text-sm font-bold" htmlFor={`${id}-description`}>Appearance<textarea id={`${id}-description`} value={fields.description} maxLength={2000} rows={4} onChange={(event) => update({ description: event.target.value })} className={`${input} resize-y`} /></label>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="space-y-1 text-sm font-bold" htmlFor={`${id}-importance`}>Importance<select id={`${id}-importance`} value={fields.importance} onChange={(event) => update({ importance: event.target.value as Fields["importance"] })} className={input}><option value="main">Main character</option><option value="supporting">Supporting character</option><option value="minor">Minor character</option></select></label>
-      <label className="space-y-1 text-sm font-bold" htmlFor={`${id}-source`}>How to design them<select id={`${id}-source`} value={fields.source} onChange={(event) => update({ source: event.target.value as Fields["source"] })} className={input}><option value="ai">Let AI suggest a look</option><option value="photos">Use my photos</option></select></label>
+      <label className="space-y-1 text-sm font-bold" htmlFor={`${id}-source`}>How to design them<select id={`${id}-source`} value={fields.source} onChange={(event) => { const source = event.target.value as Fields["source"]; if (onSourceChange) onSourceChange(source); else update({ source }); }} className={input}><option value="ai">✨ Let AI suggest a look</option><option value="photos">📷 Upload my photos</option></select></label>
     </div>
   </fieldset>;
 }

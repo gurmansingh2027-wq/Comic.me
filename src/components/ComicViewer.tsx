@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type ComicStatus } from "@/lib/comic";
+import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type ComicStatus, type Panel } from "@/lib/comic";
 import { downloadComicPdf, downloadPagePng, loadImage, renderFullPage } from "@/lib/engines/render";
 import { renderFonts } from "@/lib/fonts";
 import { getStyle } from "@/lib/styles";
 import ComicPageCanvas, { type ImageStatus } from "./ComicPageCanvas";
+import ComicPageEditor from "./ComicPageEditor";
+import Countdown, { ESTIMATES, formatDuration } from "./Countdown";
 
 /**
  * How many pictures are drawn at the same time. Kept low because new OpenAI accounts
@@ -20,15 +23,19 @@ type Props = {
   styleId: string;
   initialStatus: ComicStatus;
   initialError?: string;
+  /** When the current writing stage started (ISO time). */
+  initialSince?: string;
   initialScript?: ComicScript;
   alreadyDrawn: string[];
 };
 
-export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialScript, alreadyDrawn }: Props) {
+export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn }: Props) {
   const style = getStyle(styleId)!;
+  const router = useRouter();
   const [status, setStatus] = useState<ComicStatus>(initialStatus);
   const [error, setError] = useState(initialError);
   const [script, setScript] = useState(initialScript);
+  const [since, setSince] = useState(() => (initialSince ? Date.parse(initialSince) : Date.now()));
 
   // --- Step 1: wait for the script to be written --------------------------------------------
   useEffect(() => {
@@ -37,31 +44,35 @@ export default function ComicViewer({ comicId, styleId, initialStatus, initialEr
       const response = await fetch(`/api/comics/${comicId}`).catch(() => null);
       if (!response?.ok) return;
       const data = await response.json();
+      // Once written, the comic goes to the storyboard for review before any drawing.
+      if (data.status === "ready" && data.stage === "storyboard") {
+        router.push(`/comic/${comicId}/storyboard`);
+        return;
+      }
       setStatus(data.status);
       setError(data.error);
+      if (data.since) setSince(Date.parse(data.since));
       if (data.script) setScript(data.script);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [comicId, status]);
+  }, [comicId, status, router]);
 
   async function retryWriting() {
     setStatus("writing");
     setError(undefined);
+    setSince(Date.now());
     await fetch(`/api/comics/${comicId}`, { method: "POST" });
   }
 
   if (status !== "ready" || !script) {
-    return <WritingProgress status={status} error={error} onRetry={retryWriting} />;
+    return <WritingProgress status={status} error={error} since={since} onRetry={retryWriting} />;
   }
   return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} />;
 }
 
-function WritingProgress({ status, error, onRetry }: { status: ComicStatus; error?: string; onRetry: () => void }) {
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
+function WritingProgress({ status, error, since, onRetry }: { status: ComicStatus; error?: string; since: number; onRetry: () => void }) {
+  // While writing, the polish pass is still to come; while polishing, only its own time is left.
+  const estimate = status === "polishing" ? ESTIMATES.polishScript : ESTIMATES.writeScript + ESTIMATES.polishScript;
 
   if (status === "failed") {
     return (
@@ -83,8 +94,8 @@ function WritingProgress({ status, error, onRetry }: { status: ComicStatus; erro
   const steps = [
     { label: "Reading your story", done: true },
     { label: "Planning the pages and writing every panel", done: status === "polishing", active: status === "writing" },
-    { label: "Editor polishing the dialogue", done: false, active: status === "polishing" },
-    { label: "Drawing the cover and panels", done: false },
+    { label: "Editor polishing the dialogue, art director designing the cover", done: false, active: status === "polishing" },
+    { label: "Your storyboard to review and edit", done: false },
   ];
   return (
     <div className="comic-box mx-auto max-w-xl space-y-5 bg-white p-8">
@@ -99,9 +110,11 @@ function WritingProgress({ status, error, onRetry }: { status: ComicStatus; erro
           </li>
         ))}
       </ol>
+      <p className="rounded border-2 border-ink bg-pop p-3 text-center text-lg font-bold">
+        ⏱ <Countdown key={`${status}-${since}`} startedAt={since} seconds={estimate} />
+      </p>
       <p className="text-center text-sm text-neutral-600">
-        Writing usually takes 2–4 minutes ({Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")} so far). You can
-        leave this page open, or come back to this link later.
+        You can leave this page open, or come back to this link later.
       </p>
     </div>
   );
@@ -111,7 +124,7 @@ function WritingProgress({ status, error, onRetry }: { status: ComicStatus; erro
 
 function ComicDrawing({
   comicId,
-  script,
+  script: initialScript,
   style,
   alreadyDrawn,
 }: {
@@ -120,7 +133,14 @@ function ComicDrawing({
   style: NonNullable<ReturnType<typeof getStyle>>;
   alreadyDrawn: string[];
 }) {
-  const keys = useMemo(() => imageKeys(script), [script]);
+  // The comic's text can still be edited here (it's lettered by our code), so keep a live copy.
+  const [script, setScript] = useState(initialScript);
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const firstRender = useRef(true);
+  // Bumped when a picture is redrawn, so the browser loads the new version.
+  const [versions, setVersions] = useState<Record<string, number>>({});
+  const keys = useMemo(() => imageKeys(initialScript), [initialScript]);
+  const names = useMemo(() => script.characters.map((c) => c.name), [script.characters]);
   const [statuses, setStatuses] = useState<Record<string, ImageStatus>>(() =>
     Object.fromEntries(keys.map((key) => [key, alreadyDrawn.includes(key) ? "ready" : "waiting"])),
   );
@@ -128,9 +148,10 @@ function ComicDrawing({
   const [images, setImages] = useState<Record<string, HTMLImageElement>>({});
   const [downloading, setDownloading] = useState(false);
 
+  const [drawingSince, setDrawingSince] = useState<Record<string, number>>({});
   const statusRef = useRef(statuses);
   const active = useRef(0);
-  const urlFor = useCallback((key: string) => imageUrl(comicId, key), [comicId]);
+  const urlFor = useCallback((key: string) => `${imageUrl(comicId, key)}?v=${versions[key] ?? 0}`, [comicId, versions]);
 
   const setKeyStatus = useCallback((key: string, value: ImageStatus) => {
     statusRef.current = { ...statusRef.current, [key]: value };
@@ -171,6 +192,7 @@ function ComicDrawing({
         const next = keys.find((key) => statusRef.current[key] === "waiting");
         if (!next) return;
         setKeyStatus(next, "drawing");
+        setDrawingSince((current) => ({ ...current, [next]: Date.now() }));
         try {
           await draw(next);
           setKeyStatus(next, "ready");
@@ -195,9 +217,64 @@ function ComicDrawing({
     startWorkers();
   };
 
+  /** Redraws one picture with the reader's requested change. */
+  async function redraw(key: string, feedback: string) {
+    setKeyStatus(key, "drawing");
+    setDrawingSince((current) => ({ ...current, [key]: Date.now() }));
+    try {
+      const response = await fetch(`/api/comics/${comicId}/images/${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redraw: true, feedback }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Couldn't redraw this panel.");
+      setVersions((current) => ({ ...current, [key]: (current[key] ?? 0) + 1 }));
+      setImages((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setErrors((current) => ({ ...current, [key]: (err as Error).message }));
+    } finally {
+      // The old picture is still there if the redraw failed.
+      setKeyStatus(key, "ready");
+    }
+  }
+
+  // Save text and balloon edits a moment after each change.
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    setSaveState("saving");
+    const timer = setTimeout(async () => {
+      const response = await fetch(`/api/comics/${comicId}/lettering`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue }) => ({ caption, captionPos, dialogue })) })) }),
+      }).catch(() => null);
+      setSaveState(response?.ok ? "saved" : "error");
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [script, comicId]);
+
+  const changePanel = (pageIndex: number, panelIndex: number, update: (panel: Panel) => Panel) =>
+    setScript((current) => ({
+      ...current,
+      pages: current.pages.map((page, p) =>
+        p === pageIndex ? { ...page, panels: page.panels.map((panel, i) => (i === panelIndex ? update(panel) : panel)) } : page,
+      ),
+    }));
+
   const readyCount = keys.filter((key) => statuses[key] === "ready").length;
   const allReady = readyCount === keys.length;
-  const minutesLeft = Math.max(1, Math.ceil((keys.length - readyCount) / 4.5));
+  const waitingCount = keys.filter((key) => statuses[key] === "waiting").length;
+  const drawingCount = keys.filter((key) => statuses[key] === "drawing").length;
+  // Several pictures draw at once, within OpenAI's per-minute limit; pad for the last few.
+  const secondsLeft = waitingCount * ESTIMATES.picturePerComic + (drawingCount > 0 ? ESTIMATES.picture : 0);
 
   async function handleDownload() {
     setDownloading(true);
@@ -223,9 +300,11 @@ function ComicDrawing({
       keys: pageKeys,
       images: pageKeys.map((key) => images[key] ?? null),
       statuses: pageKeys.map((key) => statuses[key]),
+      drawingSince: pageKeys.map((key) => drawingSince[key]),
       errors: pageKeys.map((key) => errors[key]),
       onRetry: retry,
       onSave: () => savePage(which),
+      onRedraw: which === "cover" ? (feedback: string) => redraw("cover", feedback) : undefined,
     };
   };
 
@@ -243,7 +322,7 @@ function ComicDrawing({
           <p className="mt-2 text-sm text-neutral-700">
             {allReady
               ? "Your comic is ready!"
-              : `Drawing ${readyCount} of ${keys.length} pictures… about ${minutesLeft} min left. Keep this page open.`}
+              : `Drawing ${readyCount} of ${keys.length} pictures… about ${formatDuration(secondsLeft)} left. Keep this page open.`}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
@@ -261,11 +340,36 @@ function ComicDrawing({
         </div>
       </div>
 
+      {allReady && (
+        <p className="text-center text-sm text-neutral-700">
+          ✏️ Tip: drag or click any speech bubble or caption to move or edit it, or press <strong>Redraw</strong> on a panel you
+          don&apos;t like. {saveState === "saving" ? "Saving…" : saveState === "error" ? "⚠️ Changes not saved" : ""}
+        </p>
+      )}
+
       <div className="grid gap-8 md:grid-cols-2">
         {script.cover && <ComicPageCanvas {...pageProps("cover")} />}
-        {script.pages.map((_, index) => (
-          <ComicPageCanvas key={index} {...pageProps(index)} />
-        ))}
+        {script.pages.map((page, index) => {
+          const pageKeys = page.panels.map((_, i) => panelKey(index, i));
+          return (
+            <ComicPageEditor
+              key={index}
+              page={page}
+              pageIndex={index}
+              style={style}
+              names={names}
+              keys={pageKeys}
+              images={pageKeys.map((key) => images[key] ?? null)}
+              statuses={pageKeys.map((key) => statuses[key])}
+              drawingSince={pageKeys.map((key) => drawingSince[key])}
+              errors={pageKeys.map((key) => errors[key])}
+              onRetry={retry}
+              onRedraw={redraw}
+              onChangePanel={(panelIndex, update) => changePanel(index, panelIndex, update)}
+              onSave={() => savePage(index)}
+            />
+          );
+        })}
       </div>
     </div>
   );
