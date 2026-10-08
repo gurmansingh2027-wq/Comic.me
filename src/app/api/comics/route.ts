@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, type Comic, type Intake } from "@/lib/comic";
+import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, remixPresetFor, type Comic, type Intake } from "@/lib/comic";
 import { isValidTranscript } from "@/lib/interview";
 import { errorResponse, UserFacingError } from "@/lib/errors";
-import { saveComic } from "@/lib/storage";
+import { loadComic, saveComic } from "@/lib/storage";
 import { getStyle } from "@/lib/styles";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export const maxDuration = 800;
 /** Saves the locked story and style as a draft for the Characters step. */
 export async function POST(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown; intake?: Intake };
+    const body = (await request.json().catch(() => ({}))) as { story?: unknown; styleId?: unknown; intake?: Intake; presetId?: unknown };
     const story = typeof body.story === "string" ? body.story.trim() : "";
     const style = typeof body.styleId === "string" ? getStyle(body.styleId) : undefined;
 
@@ -30,6 +30,9 @@ export async function POST(request: Request) {
       body.intake && isValidTranscript(body.intake.turns) && Array.isArray(body.intake.characters)
         ? { turns: body.intake.turns, characters: body.intake.characters.filter((c) => c && typeof c.name === "string" && typeof c.role === "string" && typeof c.look === "string").slice(0, 20) }
         : undefined;
+    // Recreate: copy only the published comic's format, never its content.
+    const source = typeof body.presetId === "string" ? await loadComic(body.presetId) : null;
+    const preset = source?.explore?.published ? remixPresetFor(source) ?? undefined : undefined;
     const comic: Comic = {
       id: randomUUID(),
       createdAt: now,
@@ -37,6 +40,7 @@ export async function POST(request: Request) {
       styleId: style.id,
       story,
       intake,
+      preset,
       status: "draft",
     };
     await saveComic(comic);

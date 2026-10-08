@@ -2,9 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { MAX_STORY_LENGTH } from "@/lib/comic";
+import { MAX_STORY_LENGTH, type RemixPreset } from "@/lib/comic";
 import { INTERVIEW_GREETING, type InterviewTurn } from "@/lib/interview";
-import { COMIC_STYLES } from "@/lib/styles";
+import { COMIC_STYLES, getStyle } from "@/lib/styles";
 import Stepper from "./Stepper";
 import StylePicker from "./StylePicker";
 import { audioFileName, useVoice } from "./useVoice";
@@ -17,7 +17,7 @@ type Composed = {
 
 type Phase = "interview" | "composing" | "review" | "style";
 
-type Saved = { phase: Phase; turns: InterviewTurn[]; composed: Composed | null; styleId: string };
+type Saved = { phase: Phase; turns: InterviewTurn[]; composed: Composed | null; styleId: string; presetId?: string };
 
 const STORAGE_KEY = "comicme.studio.v1";
 const FRESH: Saved = {
@@ -38,7 +38,8 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export default function StoryStudio() {
+/** `preset`: when arriving from Explore's "Recreate", the format to reuse (style, structure, cover direction). */
+export default function StoryStudio({ preset }: { preset?: RemixPreset | null }) {
   const router = useRouter();
   const [state, setState] = useState<Saved>(FRESH);
   const [loaded, setLoaded] = useState(false);
@@ -52,10 +53,12 @@ export default function StoryStudio() {
   // Keep the session across refreshes.
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
+    const restored: Saved = saved ? { ...FRESH, ...JSON.parse(saved) } : FRESH;
+    // Recreate: start from the chosen comic's style; the format travels with the comic as a preset.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring saved progress once on mount
-    if (saved) setState({ ...FRESH, ...JSON.parse(saved) });
+    setState(preset ? { ...restored, styleId: getStyle(preset.styleId)?.id ?? restored.styleId, presetId: preset.sourceId } : restored);
     setLoaded(true);
-  }, []);
+  }, [preset]);
   useEffect(() => {
     if (loaded) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state, loaded]);
@@ -146,6 +149,7 @@ export default function StoryStudio() {
         story,
         styleId: state.styleId,
         intake: { turns: state.turns, characters: state.composed.characters },
+        presetId: state.presetId,
       });
       localStorage.removeItem(STORAGE_KEY);
       router.push(`/comic/${id}/characters`);
@@ -164,9 +168,23 @@ export default function StoryStudio() {
   if (!loaded) return null;
 
   const step = state.phase === "style" ? "Style" : "Your story";
+  const recreating = preset && state.presetId === preset.sourceId ? preset : null;
   return (
     <div className="space-y-8">
       <Stepper current={step} />
+
+      {recreating && (
+        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3">
+          <p className="text-sm">
+            ✨ <strong>Recreating the format of “{recreating.title}”</strong>: {getStyle(recreating.styleId)?.label} style, about{" "}
+            {recreating.pageCount} pages, {recreating.pacing} pacing{recreating.coverApproach ? `, ${recreating.coverApproach.replace(/-/g, " ")} cover` : ""}.
+            Your story, people and photos stay yours.
+          </p>
+          <button type="button" onClick={() => setState({ ...state, presetId: undefined })} className="text-xs font-bold underline">
+            Don&apos;t use this format
+          </button>
+        </div>
+      )}
 
       {(state.phase === "interview" || state.phase === "composing") && (
         <section className="comic-box mx-auto max-w-3xl bg-white">

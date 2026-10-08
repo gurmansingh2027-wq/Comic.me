@@ -35,6 +35,7 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
         initialSince={comic.updatedAt}
         initialScript={ready ? comic.script : undefined}
         alreadyDrawn={keys.filter((_, i) => drawn[i])}
+        initialPublished={!!comic.explore?.published}
       />
       {comic.costLog && comic.costLog.length > 0 && (
         <details className="mx-auto max-w-xl text-sm text-neutral-600">

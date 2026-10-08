@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { MAX_PAGES, MAX_PANELS, type CastMember, type ComicScript, type Page } from "../comic";
+import { MAX_PAGES, MAX_PANELS, type CastMember, type ComicScript, type Page, type RemixPreset } from "../comic";
 import { askClaude } from "../claude";
 import { UserFacingError } from "../errors";
 import { fitLayout, LAYOUT_IDS, layoutMenu } from "../layouts";
@@ -151,7 +151,11 @@ Rules:
 - You may also polish the title and tagline.`;
 
 /** Pass 1: the writer. */
-export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[]): Promise<ComicScript> {
+export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[], preset?: RemixPreset): Promise<ComicScript> {
+  // Recreate: borrow another comic's format (structure, pacing), never its content.
+  const presetNotes = preset
+    ? `\n\n<format_template>\nThe person chose to recreate the format of a comic they liked. Use it as a template for structure and pacing, adapted to THIS story: about ${preset.pageCount} pages and ${preset.panelCount} panels, ${preset.pacing} pacing, page layouts in roughly this order: ${preset.layoutPattern.join(", ")}. Adjust where this story clearly needs it.\n</format_template>`
+    : "";
   const castNotes =
     cast === undefined
       ? ""
@@ -170,7 +174,7 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
         )}\n</cast_bible>\nThis cast is authoritative. Use their names exactly (including punctuation) in the character list, cover scene, panel scenes, scene context and speakers. Respect their identity; do not invent replacement looks or bring back removed named characters. Extra unnamed background people are fine. In every scene, name each cast member visible in frame, and choose their stage and wardrobe in the scene context.`;
   const draft = await askClaude({
     system: WRITER_PROMPT,
-    user: `Art style: ${style.label} — ${style.blurb}.\nHow this style tells stories: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}`,
+    user: `Art style: ${style.label} — ${style.blurb}.\nHow this style tells stories: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}${presetNotes}`,
     schema: ScriptSchema,
     effort: "high",
     operation: "comic-director",

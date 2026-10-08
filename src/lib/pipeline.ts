@@ -54,13 +54,14 @@ export async function runWriting(id: string): Promise<void> {
 
     comic = { ...comic, status: "writing", error: undefined };
     await saveComic(comic);
-    const direct = await metered(() => writeScript(comic!.story, style, comic!.cast));
+    const direct = await metered(() => writeScript(comic!.story, style, comic!.cast, comic!.preset));
     const draft = direct.result;
 
     comic = { ...comic, status: "polishing", script: draft };
     await saveComic(comic);
     const story = comic.story;
     const cast = comic.cast;
+    const preset = comic.preset;
     const edit = await metered(() =>
       polishScript(story, draft).catch((error) => {
         // The draft is already good enough to draw; don't fail the whole comic over the polish pass.
@@ -71,7 +72,7 @@ export async function runWriting(id: string): Promise<void> {
     const polished = edit.result;
     // The cover gets its own art director pass, built around this story's theme.
     const coverPass = await metered(() =>
-      designCover(polished, story, style, cast).catch((error) => {
+      designCover(polished, story, style, cast, preset).catch((error) => {
         console.error("Cover design failed, keeping the writer's cover:", error);
         return polished.cover;
       }),

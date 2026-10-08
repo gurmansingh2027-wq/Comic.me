@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { askClaude } from "../claude";
-import { COVER_FONTS, type CastMember, type ComicScript } from "../comic";
+import { COVER_FONTS, type CastMember, type ComicScript, type RemixPreset } from "../comic";
 import type { ComicStyle } from "../styles";
 
 // Cover Art Director: designs one cover per comic, built around what this particular story
@@ -87,7 +87,7 @@ function toCover(concept: Concept) {
   };
 }
 
-export async function designCover(script: ComicScript, story: string, style: ComicStyle, cast?: CastMember[]) {
+export async function designCover(script: ComicScript, story: string, style: ComicStyle, cast?: CastMember[], preset?: RemixPreset) {
   const people = (cast ?? []).map((member) => `- ${member.name} (${member.importance}): ${member.role}`).join("\n") ||
     script.characters.map((character) => `- ${character.name}`).join("\n");
   const outline = script.pages
@@ -97,7 +97,7 @@ export async function designCover(script: ComicScript, story: string, style: Com
 
   const cover = await askClaude({
     system: COVER_PROMPT,
-    user: `Art style: ${style.label}. ${style.art}\nHow this style tells stories and designs covers: ${style.storytelling}\n\nTitle: ${script.title}\nTagline: ${script.tagline}\nLogline: ${script.bible?.logline ?? ""}\nTone: ${script.bible?.tone ?? ""}\nArc: ${script.bible?.arc ?? ""}\n\nPeople:\n${people}\n\n<page_outline>\n${outline}\n</page_outline>\n\n<original_story>\n${story.slice(0, 4000)}\n</original_story>`,
+    user: `Art style: ${style.label}. ${style.art}\nHow this style tells stories and designs covers: ${style.storytelling}\n\nTitle: ${script.title}\nTagline: ${script.tagline}\nLogline: ${script.bible?.logline ?? ""}\nTone: ${script.bible?.tone ?? ""}\nArc: ${script.bible?.arc ?? ""}\n\nPeople:\n${people}\n\n<page_outline>\n${outline}\n</page_outline>\n\n<original_story>\n${story.slice(0, 4000)}\n</original_story>${preset?.coverApproach ? `\n\nThe person is recreating a comic whose cover used the "${preset.coverApproach}" approach${preset.coverTitleFont ? ` with ${preset.coverTitleFont} title lettering` : ""}. Make your FIRST idea use that approach (for this story), and the other two different.` : ""}`,
     schema: CoverSchema,
     effort: "medium",
     operation: "cover-art-director",
