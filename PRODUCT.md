@@ -28,7 +28,7 @@ How the comic itself is made:
    - *Editor:* rereads it as a first-time reader and sharpens captions and dialogue for context and specificity.
    - *Cover art director* (`src/lib/engines/cover.ts`): detects the genre, then proposes **three different cover ideas** (approach, detailed art brief, title typeface and colours); the user picks one on the storyboard before anything is drawn.
 3. **Page layouts** (`src/lib/layouts.ts`): 12 comic-book layouts from a full-page splash to 6-panel grids; big panels for big moments.
-4. **Art Engine** (OpenAI `gpt-image-2`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. For every panel, the approved design sheets of the characters in that scene (up to 4) are sent as reference pictures, so faces and outfits stay consistent. Paced for OpenAI's images-per-minute limit with automatic retries.
+4. **Art Engine** (OpenAI `gpt-image-2.5-flare`, chosen in the model benchmark — see `docs/benchmark-pilot-results.md`) draws a cover plus every panel in its real shape (wide, tall or square), art only, no text. For every panel, the approved design sheets of the characters in that scene (up to 4) are sent as reference pictures, so faces and outfits stay consistent. Paced for OpenAI's images-per-minute limit with automatic retries.
 5. **Render Engine** (browser canvas) letters every page: caption boxes and speech / shout / whisper / thought balloons in reading order, per-style lettering (fonts, caption colours, page colour). Downloads as a print-ready PDF (2:3 pages) or per-page PNG.
 6. Comics are saved on local disk under `storage/comics/<id>/` and viewed at `/comic/<id>`.
 

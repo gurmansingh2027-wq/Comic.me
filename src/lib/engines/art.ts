@@ -19,7 +19,7 @@ type Quality = (typeof QUALITIES)[number];
 /** Most reference images we send with one panel. */
 const MAX_REFERENCES = 4;
 
-export const IMAGE_MODEL = () => process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2";
+export const IMAGE_MODEL = () => process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2.5-flare";
 
 export function imageQuality(): Quality {
   const value = process.env.OPENAI_IMAGE_QUALITY?.trim() as Quality;

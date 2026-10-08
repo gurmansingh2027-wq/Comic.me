@@ -10,7 +10,7 @@ export const CLAUDE_PER_MILLION: Record<string, { input: number; output: number 
   "claude-haiku-4-5": { input: 1, output: 5 },
 };
 
-/** gpt-image-2 price for one ~1 megapixel output picture, by quality. */
+/** gpt-image-2 / gpt-image-2.5 price (same token rates) for one ~1 megapixel output picture, by quality. */
 export const IMAGE_PER_MEGAPIXEL: Record<string, number> = { low: 0.006, medium: 0.053, high: 0.211 };
 /** Rough extra cost for each reference picture sent with an image edit (input image tokens). */
 export const IMAGE_REFERENCE = 0.01;
