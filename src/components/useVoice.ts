@@ -53,12 +53,12 @@ export function useVoice() {
 
   /** Plays the interviewer's reply aloud. */
   const say = useCallback(
-    async (text: string) => {
+    async (text: string, session?: string) => {
       stopSpeaking();
       const response = await fetch("/api/voice/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, session }),
       });
       if (!response.ok) return;
       const url = URL.createObjectURL(await response.blob());

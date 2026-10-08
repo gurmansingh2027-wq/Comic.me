@@ -1,5 +1,6 @@
 import { addCost } from "@/lib/costs";
 import { coverJob, drawImage, panelJob } from "@/lib/engines/art";
+import { metered } from "@/lib/meter";
 import { errorResponse, UserFacingError } from "@/lib/errors";
 import { castFilePath, hasImage, imagePath, isValidImageKey, loadComic, loadImage, saveComic, saveImage, withComicLock } from "@/lib/storage";
 import { getStyle } from "@/lib/styles";
@@ -32,8 +33,16 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
     const style = getStyle(comic.styleId);
     if (!style) throw new UserFacingError("This comic's style no longer exists.", 500);
     const castRefs = (comic.cast ?? []).filter((member) => member.design?.approved).map((member) => ({
-      name: member.name, description: member.description, importance: member.importance,
+      name: member.name,
+      description: member.description,
+      importance: member.importance,
       designPath: castFilePath(id, member.design!.file),
+      stages: (member.stages ?? []).map((stage) => ({
+        id: stage.id,
+        label: stage.label,
+        look: stage.look,
+        designPath: stage.design?.approved ? castFilePath(id, stage.design.file) : undefined,
+      })),
     }));
 
     const exists = await hasImage(id, key);
@@ -54,17 +63,17 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
       const flightKey = `${id}/${key}/redraw`;
       let drawing = inFlight.get(flightKey);
       if (!drawing) {
-        drawing = drawImage(job)
-          .then((image) => saveImage(id, key, image))
-          .then(() =>
-            withComicLock(id, async () => {
+        drawing = metered(() => drawImage(job))
+          .then(async ({ result: image, usage }) => {
+            await saveImage(id, key, image);
+            await withComicLock(id, async () => {
               const latest = await loadComic(id);
               if (!latest) return;
               const updated = { ...latest, redraws: (latest.redraws ?? 0) + 1 };
-              addCost(updated, "redraw", key);
+              addCost(updated, "redraw", key, usage);
               await saveComic(updated);
-            }),
-          )
+            });
+          })
           .finally(() => inFlight.delete(flightKey));
         inFlight.set(flightKey, drawing);
       }
@@ -73,16 +82,16 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
       const flightKey = `${id}/${key}`;
       let drawing = inFlight.get(flightKey);
       if (!drawing) {
-        drawing = drawImage(job)
-          .then((image) => saveImage(id, key, image))
-          .then(() =>
-            withComicLock(id, async () => {
+        drawing = metered(() => drawImage(job))
+          .then(async ({ result: image, usage }) => {
+            await saveImage(id, key, image);
+            await withComicLock(id, async () => {
               const latest = await loadComic(id);
               if (!latest) return;
-              addCost(latest, "picture", key);
+              addCost(latest, "picture", key, usage);
               await saveComic(latest);
-            }),
-          )
+            });
+          })
           .finally(() => inFlight.delete(flightKey));
         inFlight.set(flightKey, drawing);
       }

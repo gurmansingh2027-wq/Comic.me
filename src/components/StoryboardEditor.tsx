@@ -2,8 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { countPanels, MAX_PAGES, MAX_PANELS, type BalloonKind, type ComicScript, type DialogueLine, type LetterPos, type Page, type Panel, type Shot } from "@/lib/comic";
-import { drawingCost, formatUsd } from "@/lib/costs";
+import { countPanels, MAX_PAGES, MAX_PANELS, type BalloonKind, type ComicScript, type DialogueLine, type LetterPos, type Page, type Panel, type PanelCast, type SceneContext, type Shot } from "@/lib/comic";
+import { drawingCost, formatUsd, type PicturePricing } from "@/lib/costs";
 import { fitLayout, LAYOUT_IDS, LAYOUTS, type LayoutId } from "@/lib/layouts";
 import { getStyle } from "@/lib/styles";
 import { ESTIMATES, formatDuration } from "./Countdown";
@@ -38,6 +38,12 @@ const small = "rounded border-2 border-ink bg-white px-2 py-1 text-xs font-bold 
 
 type Selection = { page: number } & LetterRef;
 
+/** Which cover idea is currently chosen (matched by its concept), if the art director offered several. */
+function coverChoice(script: ComicScript): number | undefined {
+  const k = script.cover?.options?.findIndex((option) => option.design.concept === script.cover?.design?.concept);
+  return k === undefined || k < 0 ? undefined : k;
+}
+
 function emptyPanel(): Panel {
   return { shot: "medium", scene: "", caption: "", dialogue: [] };
 }
@@ -50,7 +56,23 @@ function move<T>(list: T[], from: number, to: number): T[] {
   return next;
 }
 
-export default function StoryboardEditor({ comicId, styleId, initialScript }: { comicId: string; styleId: string; initialScript: ComicScript }) {
+export type CastStages = { name: string; stages: { id: string; label: string }[] }[];
+
+export default function StoryboardEditor({
+  comicId,
+  styleId,
+  initialScript,
+  castStages = [],
+  pricing,
+}: {
+  comicId: string;
+  styleId: string;
+  initialScript: ComicScript;
+  /** Each cast member's life stages, so panels can be switched between ages. */
+  castStages?: CastStages;
+  /** Price of one picture for the current image model, to estimate the drawing cost. */
+  pricing: PicturePricing;
+}) {
   const router = useRouter();
   const style = getStyle(styleId)!;
   const [script, setScript] = useState(initialScript);
@@ -61,6 +83,10 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
   const [selected, setSelected] = useState<Selection | null>(null);
   const firstRender = useRef(true);
   const names = useMemo(() => script.characters.map((c) => c.name), [script.characters]);
+  const stageLabels = useMemo(
+    () => Object.fromEntries(castStages.flatMap((member) => member.stages.map((stage) => [`${member.name}|${stage.id}`, stage.label]))),
+    [castStages],
+  );
 
   // Save a moment after each change.
   useEffect(() => {
@@ -74,7 +100,7 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
         const response = await fetch(`/api/comics/${comicId}/storyboard`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: script.title, tagline: script.tagline, coverScene: script.cover?.scene, pages: script.pages }),
+          body: JSON.stringify({ title: script.title, tagline: script.tagline, coverChoice: coverChoice(script), coverScene: script.cover?.scene, pages: script.pages }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error ?? "Couldn't save your changes.");
@@ -127,7 +153,7 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
       const saved = await fetch(`/api/comics/${comicId}/storyboard`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: script.title, tagline: script.tagline, coverScene: script.cover?.scene, pages: script.pages }),
+        body: JSON.stringify({ title: script.title, tagline: script.tagline, coverChoice: coverChoice(script), coverScene: script.cover?.scene, pages: script.pages }),
       });
       if (!saved.ok) throw new Error((await saved.json().catch(() => ({}))).error ?? "Couldn't save your changes.");
       const response = await fetch(`/api/comics/${comicId}/storyboard`, { method: "POST" });
@@ -162,23 +188,46 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
           </label>
         </div>
         {script.cover && (
-          <label className="block space-y-1 text-sm font-bold">
-            🎨 Cover idea{script.cover.design ? ` · ${script.cover.design.concept}` : ""}
-            <textarea
-              value={script.cover.scene}
-              rows={3}
-              maxLength={3000}
-              onChange={(e) => setScript({ ...script, cover: { ...script.cover!, scene: e.target.value } })}
-              className={`${field} resize-y font-normal`}
-            />
-          </label>
+          <div className="space-y-2">
+            <p className="text-sm font-bold">🎨 Cover idea {script.cover.options && script.cover.options.length > 1 && "· pick one (nothing is drawn yet)"}</p>
+            {script.cover.options && script.cover.options.length > 1 && (
+              <div className="grid gap-2 md:grid-cols-3">
+                {script.cover.options.map((option, k) => {
+                  const chosen = coverChoice(script) === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setScript({ ...script, cover: { ...script.cover!, scene: option.scene, design: option.design } })}
+                      className={`rounded border-3 p-3 text-left text-sm ${chosen ? "border-ink bg-pop shadow-[3px_3px_0_#111]" : "border-neutral-300 bg-paper hover:border-ink"}`}
+                    >
+                      <span className="block text-xs font-bold uppercase tracking-wide text-neutral-600">
+                        {option.design.approach?.replace(/-/g, " ") ?? "idea"} · title in {option.design.titleFont}
+                      </span>
+                      <span className="mt-1 block">{option.design.concept}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <label className="block space-y-1 text-xs font-bold">
+              Brief for the cover artist (edit if you like)
+              <textarea
+                value={script.cover.scene}
+                rows={3}
+                maxLength={3000}
+                onChange={(e) => setScript({ ...script, cover: { ...script.cover!, scene: e.target.value } })}
+                className={`${field} resize-y font-normal`}
+              />
+            </label>
+          </div>
         )}
       </section>
 
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3 shadow-[4px_4px_0_#111]">
         <p className="text-sm font-bold">
           {script.pages.length} pages · {totalPanels} panels · drawing takes about {formatDuration(pictures * ESTIMATES.picturePerComic + ESTIMATES.picture)} and
-          costs about {formatUsd(drawingCost(totalPanels, !!script.cover))}
+          costs about {formatUsd(drawingCost(script, pricing))}
           <span className="ml-3 font-normal">{saveState === "saving" ? "Saving…" : saveState === "error" ? "⚠️ Not saved" : "✓ Saved"}</span>
         </p>
         <button
@@ -214,6 +263,7 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
                   pageNumber={p + 1}
                   style={style}
                   names={names}
+                  stageLabels={stageLabels}
                   selected={selected?.page === p ? selected : null}
                   onSelect={(ref) => select(p, ref)}
                   onMove={(ref, pos) => moveLettering(p, ref, pos)}
@@ -247,8 +297,16 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
                     What we see (for the artist)
                     <textarea value={panel.scene} rows={2} maxLength={2000} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, scene: e.target.value }))} placeholder="Who is in the panel, where, doing what, how they feel" className={`${field} resize-y`} />
                   </label>
+                  {panel.context && (
+                    <SceneDetails
+                      context={panel.context}
+                      names={names}
+                      castStages={castStages}
+                      onChange={(context) => setPanel(p, i, (pn) => ({ ...pn, context }))}
+                    />
+                  )}
                   <div className="flex items-center gap-2">
-                    <input id={`caption-${p}-${i}`} value={panel.caption} maxLength={400} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, caption: e.target.value }))} placeholder="Caption (narration box), optional" className={`${field} bg-amber-50`} />
+                    <input id={`caption-${p}-${i}`} value={panel.caption} maxLength={400} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, caption: e.target.value }))} placeholder="Narration (caption box), optional" className={`${field} bg-amber-50`} />
                     {panel.captionPos && <button className={small} onClick={() => moveLettering(p, { panel: i, ref: "caption" }, null)} title="Put it back in its automatic spot">↺ Auto</button>}
                   </div>
                   {panel.dialogue.map((line, l) => (
@@ -308,6 +366,83 @@ export default function StoryboardEditor({ comicId, styleId, initialScript }: { 
         </button>
         {approveError && <p role="alert" className="mt-3 font-bold text-zap">{approveError}</p>}
       </div>
+    </div>
+  );
+}
+
+/** Where, when, who (at what age) and what they wear: the facts each picture is built from. */
+function SceneDetails({
+  context,
+  names,
+  castStages,
+  onChange,
+}: {
+  context: SceneContext;
+  names: string[];
+  castStages: CastStages;
+  onChange: (context: SceneContext) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const stagesOf = (name: string) => castStages.find((member) => member.name === name)?.stages ?? [];
+  const stageName = (name: string, id: string) => stagesOf(name).find((stage) => stage.id === id)?.label;
+  const when = [context.period, context.timeOfDay, context.weather].filter(Boolean).join(", ");
+  const setPerson = (index: number, patch: Partial<PanelCast>) =>
+    onChange({ ...context, cast: context.cast.map((person, k) => (k === index ? { ...person, ...patch } : person)) });
+
+  return (
+    <div className="rounded border border-neutral-300 bg-paper p-2 text-xs">
+      <button type="button" onClick={() => setOpen(!open)} className="w-full text-left">
+        <span className="font-bold">{open ? "▾" : "▸"} Scene details</span>{" "}
+        <span className="text-neutral-700">
+          {context.location && `📍 ${context.location}`} {when && `· 🕒 ${when}`}
+          {context.cast.length > 0 &&
+            ` · 👕 ${context.cast
+              .map((person) => `${person.name}${person.stage ? ` (${stageName(person.name, person.stage) ?? person.stage})` : ""}: ${person.wardrobe || "?"}`)
+              .join("; ")}`}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {(
+              [
+                ["location", "Where"],
+                ["period", "Year / era"],
+                ["timeOfDay", "Time of day"],
+                ["weather", "Weather"],
+                ["event", "Occasion"],
+                ["continuity", "Must match previous panel"],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key} className="space-y-0.5 font-bold">
+                {label}
+                <input value={context[key]} maxLength={300} onChange={(e) => onChange({ ...context, [key]: e.target.value })} className={compact + " w-full"} />
+              </label>
+            ))}
+          </div>
+          {context.cast.map((person, index) => (
+            <div key={index} className="grid items-center gap-1.5 sm:grid-cols-[7rem_8rem_1fr_7rem_auto]">
+              <span className="font-bold">{person.name}</span>
+              <select value={person.stage} onChange={(e) => setPerson(index, { stage: e.target.value })} className={compact} aria-label={`${person.name}'s age in this panel`}>
+                <option value="">Main age</option>
+                {stagesOf(person.name).map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
+              </select>
+              <input value={person.wardrobe} maxLength={300} onChange={(e) => setPerson(index, { wardrobe: e.target.value })} placeholder="Wearing" className={compact} aria-label={`What ${person.name} wears`} />
+              <input value={person.emotion} maxLength={300} onChange={(e) => setPerson(index, { emotion: e.target.value })} placeholder="Feeling" className={compact} aria-label={`How ${person.name} feels`} />
+              <button type="button" className={small} onClick={() => onChange({ ...context, cast: context.cast.filter((_, k) => k !== index) })} aria-label={`Remove ${person.name} from this panel`}>✕</button>
+            </div>
+          ))}
+          <select
+            value=""
+            onChange={(e) => e.target.value && onChange({ ...context, cast: [...context.cast, { name: e.target.value, stage: "", wardrobe: "", emotion: "", action: "" }] })}
+            className={compact}
+            aria-label="Add someone to this panel"
+          >
+            <option value="">+ Add someone to this panel</option>
+            {names.filter((name) => !context.cast.some((person) => person.name === name)).map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </div>
+      )}
     </div>
   );
 }

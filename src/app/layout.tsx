@@ -17,7 +17,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="font-title text-3xl tracking-wide">
               Comic.me
             </Link>
-            <span className="hidden text-sm font-bold sm:block">Your story, drawn as a comic</span>
+            <nav className="flex items-center gap-4 text-sm font-bold">
+              <Link href="/explore" className="hover:underline">Explore</Link>
+              <Link href="/create" className="rounded-full border-2 border-ink bg-white px-3 py-1 hover:bg-paper">Make a comic</Link>
+            </nav>
           </div>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">{children}</main>

@@ -36,6 +36,16 @@ export function friendlyError(error: unknown): { message: string; status: number
   if (error instanceof OpenAI.AuthenticationError) {
     return { message: "Your OpenAI API key was rejected. Double-check OPENAI_API_KEY in .env.local.", status: 500 };
   }
+  // Out of credit is not "busy": say clearly which account needs topping up.
+  if (error instanceof OpenAI.RateLimitError && /insufficient_quota|no credits/i.test(`${error.code} ${error.message}`)) {
+    return {
+      message: "The OpenAI account has run out of credit, so pictures can't be drawn. Add credit at platform.openai.com → Settings → Billing, then try again.",
+      status: 402,
+    };
+  }
+  if (error instanceof Anthropic.APIError && /credit balance|billing/i.test(error.message)) {
+    return { message: "The Anthropic (Claude) account has run out of credit. Add credit at console.anthropic.com → Billing, then try again.", status: 402 };
+  }
   if (error instanceof Anthropic.RateLimitError || error instanceof OpenAI.RateLimitError) {
     return { message: "The AI service is busy or your account is out of credit. Wait a minute and try again.", status: 429 };
   }

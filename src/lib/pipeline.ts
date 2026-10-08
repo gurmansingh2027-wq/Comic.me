@@ -4,6 +4,8 @@ import { addCost } from "./costs";
 import { designCover } from "./engines/cover";
 import { polishScript, writeScript } from "./engines/story";
 import { friendlyError, UserFacingError } from "./errors";
+import { metered } from "./meter";
+import type { CostUsage } from "./comic";
 import { loadComic, saveComic, withComicLock } from "./storage";
 import { getStyle } from "./styles";
 
@@ -52,25 +54,40 @@ export async function runWriting(id: string): Promise<void> {
 
     comic = { ...comic, status: "writing", error: undefined };
     await saveComic(comic);
-    const draft = await writeScript(comic.story, style, comic.cast);
+    const direct = await metered(() => writeScript(comic!.story, style, comic!.cast, comic!.preset));
+    const draft = direct.result;
 
     comic = { ...comic, status: "polishing", script: draft };
     await saveComic(comic);
-    const polished = await polishScript(comic.story, draft).catch((error) => {
-      // The draft is already good enough to draw; don't fail the whole comic over the polish pass.
-      console.error("Polish pass failed, keeping the draft:", error);
-      return draft;
-    });
+    const story = comic.story;
+    const cast = comic.cast;
+    const preset = comic.preset;
+    const edit = await metered(() =>
+      polishScript(story, draft).catch((error) => {
+        // The draft is already good enough to draw; don't fail the whole comic over the polish pass.
+        console.error("Polish pass failed, keeping the draft:", error);
+        return draft;
+      }),
+    );
+    const polished = edit.result;
     // The cover gets its own art director pass, built around this story's theme.
-    const cover = await designCover(polished, comic.story, style, comic.cast).catch((error) => {
-      console.error("Cover design failed, keeping the writer's cover:", error);
-      return polished.cover;
-    });
+    const coverPass = await metered(() =>
+      designCover(polished, story, style, cast, preset).catch((error) => {
+        console.error("Cover design failed, keeping the writer's cover:", error);
+        return polished.cover;
+      }),
+    );
+    const cover = coverPass.result;
     const script = { ...polished, cover };
 
     // The user reviews and edits the storyboard before any (paid) drawing starts.
     const finished = { ...comic, status: "ready" as const, stage: "storyboard" as const, script };
-    addCost(finished, "script");
+    const passes: [string, CostUsage[]][] = [
+      ["comic director", direct.usage],
+      ["dialogue editor", edit.usage],
+      ["cover art director", coverPass.usage],
+    ];
+    for (const [detail, usage] of passes) if (usage.length) addCost(finished, "script", detail, usage);
     await saveComic(finished);
   } catch (error) {
     if (comic) await saveComic({ ...comic, status: "failed", error: friendlyError(error).message });

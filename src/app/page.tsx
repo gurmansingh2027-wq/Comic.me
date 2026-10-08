@@ -41,8 +41,8 @@ export default function Home() {
       </section>
 
       <section className="space-y-4">
-        <h2 className="text-center font-title text-4xl tracking-wide">9 styles to choose from</h2>
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-5 lg:grid-cols-9">
+        <h2 className="text-center font-title text-4xl tracking-wide">{COMIC_STYLES.length} styles to choose from</h2>
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
           {COMIC_STYLES.map((style) => (
             <figure key={style.id} className="space-y-1 text-center">
               <Image

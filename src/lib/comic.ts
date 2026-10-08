@@ -27,12 +27,41 @@ export type DialogueLine = {
   pos?: LetterPos;
 };
 
+/** One person in a panel: which age they are, what they're wearing here, how they feel. */
+export type PanelCast = {
+  name: string;
+  /** Life stage id from the Character Bible (e.g. "child"); empty = their main look. */
+  stage: string;
+  /** Clothes for THIS scene (school uniform, wedding sherwani, gym kit…). Identity never changes. */
+  wardrobe: string;
+  emotion: string;
+  action: string;
+};
+
+/**
+ * Structured context worked out by the Comic Director for every panel, so each picture is built
+ * from facts (who, where, when, what they wear) instead of being reinvented panel by panel.
+ */
+export type SceneContext = {
+  location: string;
+  /** Year or era, e.g. "2016", "1958", "college years". */
+  period: string;
+  timeOfDay: string;
+  weather: string;
+  event: string;
+  cast: PanelCast[];
+  objects: string[];
+  /** What must match the previous panel (props in hand, injuries, mess, lighting). */
+  continuity: string;
+};
+
 export type Panel = {
   shot: Shot;
   scene: string;
   caption: string;
   captionPos?: LetterPos;
   dialogue: DialogueLine[];
+  context?: SceneContext;
 };
 
 export type Page = {
@@ -59,6 +88,8 @@ export type CoverFont = (typeof COVER_FONTS)[number];
 /** How the cover's title is lettered, chosen by the cover art director. */
 export type CoverDesign = {
   concept: string;
+  /** e.g. "symbolic", "dramatic-moment" */
+  approach?: string;
   titleFont: CoverFont;
   titleFill: string;
   titleOutline: string;
@@ -70,7 +101,8 @@ export type ComicScript = {
   tagline: string;
   bible: StoryBible | null;
   characters: Character[];
-  cover: { scene: string; design?: CoverDesign } | null;
+  /** The chosen cover (scene + design) and the alternative ideas the art director proposed. */
+  cover: { scene: string; design?: CoverDesign; options?: { scene: string; design: CoverDesign }[] } | null;
   pages: Page[];
 };
 
@@ -84,19 +116,56 @@ export type Importance = "main" | "supporting" | "minor";
 export type CastSource = "photos" | "ai";
 export type PhotoVerdict = "good" | "need-more" | "unusable";
 
-/** A person in the comic, set up in the Characters step. */
+export type CharacterDesign = { file: string; approved: boolean; needsRedraw?: boolean };
+
+/**
+ * What makes someone recognisable in every style, at every age and in any outfit.
+ * Clothes are deliberately NOT part of identity: they change with the scene.
+ */
+export type Identity = {
+  face: string;
+  skin: string;
+  hair: string;
+  body: string;
+  /** Things that make them instantly recognisable: glasses, a moustache, a scar, a bindi… */
+  markers: string[];
+};
+
+/**
+ * An age at which a character appears, only when the story spans years (childhood → college → wedding).
+ * The member's own design is their main stage; extra stages get their own approved design.
+ */
+export type LifeStage = {
+  id: string;
+  label: string;
+  ageRange: string;
+  /** How they look at this age: height, face, hair at the time. */
+  look: string;
+  design?: CharacterDesign;
+  designAttempts: number;
+  lastDesignRequestId?: string;
+};
+
+/** A person in the comic: their Character Bible entry, set up in the Characters step. */
 export type CastMember = {
   id: string;
   name: string;
   role: string;
   /** How they look; after a design is approved, this describes the approved design. */
   description: string;
+  identity?: Identity;
+  /** Label for the main design's age, e.g. "Adult (late 20s)". */
+  mainStage?: { label: string; ageRange: string };
+  /** Other ages they appear at (empty when the story doesn't span years). */
+  stages?: LifeStage[];
+  /** What they typically wear and when (work, home, festivals…); the director picks per scene. */
+  wardrobe?: string;
   importance: Importance;
   source: CastSource;
   photos: string[];
   photoCheck?: { verdict: PhotoVerdict; message: string };
-  /** Current design file and whether the user approved it. */
-  design?: { file: string; approved: boolean; needsRedraw?: boolean };
+  /** Current design file (main stage) and whether the user approved it. */
+  design?: CharacterDesign;
   designAttempts: number;
   /** Makes retrying a completed design request safe after a lost response. */
   lastDesignRequestId?: string;
@@ -121,8 +190,12 @@ export function needsDesign(member: CastMember): boolean {
 }
 
 export function castReady(cast: CastMember[]): boolean {
-  return cast.filter(needsDesign).every((member) => member.design?.approved);
+  return cast
+    .filter(needsDesign)
+    .every((member) => member.design?.approved && (member.stages ?? []).every((stage) => stage.design?.approved));
 }
+
+export const MAX_STAGES_PER_CHARACTER = 4;
 
 /**
  * After writing, a comic waits in "storyboard" until the user approves it; then it moves to
@@ -130,8 +203,27 @@ export function castReady(cast: CastMember[]): boolean {
  */
 export type ComicStage = "storyboard" | "drawing";
 
-export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw";
-export type CostEntry = { item: CostItem; usd: number; at: string; detail?: string };
+export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw" | "interview";
+
+/** One measured AI call: who served it, which model, what it did, and what it cost. */
+export type CostUsage = {
+  provider: "anthropic" | "openai";
+  model: string;
+  operation: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** Image calls: size, quality and how many reference pictures were sent. */
+  image?: { size: string; quality: string; references: number };
+  /** Voice calls: seconds of audio heard or spoken. */
+  audioSeconds?: number;
+  /** True when the price comes from usage the provider reported; false for an estimate. */
+  measured?: boolean;
+  /** Times the call was retried after a rate limit (retries don't cost extra, but slow things down). */
+  retries?: number;
+  usd: number;
+};
+
+export type CostEntry = { item: CostItem; usd: number; at: string; detail?: string; usage?: CostUsage[] };
 
 export type ComicStatus = "draft" | "writing" | "polishing" | "ready" | "failed";
 
@@ -145,6 +237,10 @@ export type Comic = {
   cast?: CastMember[];
   status: ComicStatus;
   stage?: ComicStage;
+  /** Opt-in listing on the Explore page (private by default). */
+  explore?: { published: boolean; publishedAt: string };
+  /** Recreate: the format this comic was modelled on (another comic's remix preset). */
+  preset?: RemixPreset;
   /** How many single pictures the user has asked us to redraw (for limits and pricing later). */
   redraws?: number;
   /** Every paid AI call made for this comic, with its estimated price (see src/lib/costs.ts). */
@@ -177,4 +273,41 @@ export function imageUrl(comicId: string, key: string): string {
 
 export function countPanels(script: ComicScript): number {
   return script.pages.reduce((sum, page) => sum + page.panels.length, 0);
+}
+
+/**
+ * The reusable creative format of a comic, safe to share: style, structure, pacing and cover
+ * direction. Never contains names, photos, dialogue, story text or character designs.
+ */
+export type RemixPreset = {
+  sourceId: string;
+  title: string;
+  styleId: string;
+  pageCount: number;
+  panelCount: number;
+  layoutPattern: LayoutId[];
+  pacing: "sparse" | "balanced" | "dense";
+  coverApproach?: string;
+  coverTitleFont?: CoverFont;
+  coverPalette?: { fill: string; outline: string };
+};
+
+export function remixPresetFor(comic: Comic): RemixPreset | null {
+  const script = comic.script;
+  if (!script) return null;
+  const panelCount = countPanels(script);
+  const perPage = panelCount / Math.max(1, script.pages.length);
+  const design = script.cover?.design;
+  return {
+    sourceId: comic.id,
+    title: script.title,
+    styleId: comic.styleId,
+    pageCount: script.pages.length,
+    panelCount,
+    layoutPattern: script.pages.map((page) => page.layout),
+    pacing: perPage < 3 ? "sparse" : perPage > 4.2 ? "dense" : "balanced",
+    coverApproach: design?.approach,
+    coverTitleFont: design?.titleFont,
+    coverPalette: design ? { fill: design.titleFill, outline: design.titleOutline } : undefined,
+  };
 }

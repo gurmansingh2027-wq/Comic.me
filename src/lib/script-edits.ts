@@ -18,12 +18,27 @@ const Line = z.object({
   pos: Pos.optional(),
 });
 
+const short = z.string().max(300);
+const ContextSchema = z.object({
+  location: short,
+  period: short,
+  timeOfDay: short,
+  weather: short,
+  event: short,
+  cast: z
+    .array(z.object({ name: z.string().max(100), stage: z.string().max(40), wardrobe: short, emotion: short, action: short }))
+    .max(8),
+  objects: z.array(short).max(10),
+  continuity: z.string().max(600),
+});
+
 const PanelSchema = z.object({
   shot: z.enum(["establishing", "wide", "medium", "close-up", "extreme close-up"]),
   scene: z.string().max(2000),
   caption: z.string().max(400),
   captionPos: Pos.optional(),
   dialogue: z.array(Line).max(4),
+  context: ContextSchema.optional(),
 });
 
 const PageSchema = z.object({ layout: z.enum(LAYOUT_IDS), panels: z.array(PanelSchema).min(1).max(6) });
@@ -32,8 +47,17 @@ const EditableScript = z.object({
   title: z.string().trim().min(1).max(120),
   tagline: z.string().max(200),
   coverScene: z.string().max(3000).optional(),
+  /** Which of the art director's cover ideas the user picked (index into cover.options). */
+  coverChoice: z.number().int().min(0).max(5).optional(),
   pages: z.array(PageSchema).min(1).max(MAX_PAGES),
 });
+
+/** Applies a picked cover idea (its scene and title design), then any edits to the scene text. */
+function editedCover(cover: ComicScript["cover"], choice: number | undefined, scene: string | undefined): ComicScript["cover"] {
+  if (!cover) return cover;
+  const picked = choice !== undefined && cover.options?.[choice] ? { ...cover, ...cover.options[choice] } : cover;
+  return scene !== undefined ? { ...picked, scene } : picked;
+}
 
 /** Saves the user's storyboard edits (text, panels, pages, layouts, balloon positions). */
 export async function saveStoryboard(id: string, input: unknown): Promise<ComicScript> {
@@ -51,7 +75,7 @@ export async function saveStoryboard(id: string, input: unknown): Promise<ComicS
       ...comic.script,
       title: edits.title,
       tagline: edits.tagline,
-      cover: comic.script.cover && edits.coverScene !== undefined ? { ...comic.script.cover, scene: edits.coverScene } : comic.script.cover,
+      cover: editedCover(comic.script.cover, edits.coverChoice, edits.coverScene),
       pages: edits.pages.map((page) => ({ ...page, layout: fitLayout(page.layout, page.panels.length) })),
     };
     await saveComic({ ...comic, script });

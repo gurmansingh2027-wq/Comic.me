@@ -21,6 +21,8 @@ type Props = {
   pageNumber: number;
   style: ComicStyle;
   names: string[];
+  /** "Name|stageId" → stage label, to label stick figures with their age. */
+  stageLabels?: Record<string, string>;
   /** Real artwork per panel; without it, panels are drawn as stick-figure wireframes. */
   images?: (HTMLImageElement | null)[];
   selected?: LetterRef | null;
@@ -34,7 +36,7 @@ type Props = {
 type Drag = { box: LetteringBox; mode: "move" | "resize"; startX: number; startY: number; dx: number; dy: number; dw: number };
 
 /** A comic page you can rearrange: drag captions and balloons anywhere, drag the corner to resize. */
-export default function WireframePage({ page, pageNumber, style, names, images, selected, onSelect, onMove, children }: Props) {
+export default function WireframePage({ page, pageNumber, style, names, stageLabels, images, selected, onSelect, onMove, children }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const [boxes, setBoxes] = useState<LetteringBox[]>([]);
@@ -47,14 +49,14 @@ export default function WireframePage({ page, pageNumber, style, names, images, 
       if (cancelled || !canvas) return;
       const buffer = createPageCanvas();
       const ctx = buffer.getContext("2d")!;
-      drawPage(ctx, page, pageNumber, images ?? [], style, renderFonts, images ? {} : { wireframe: { names } });
+      drawPage(ctx, page, pageNumber, images ?? [], style, renderFonts, images ? {} : { wireframe: { names, stageLabels } });
       canvas.getContext("2d")!.drawImage(buffer, 0, 0);
       setBoxes(letteringBoxes(ctx, page, style, renderFonts));
     });
     return () => {
       cancelled = true;
     };
-  }, [page, pageNumber, style, names, images]);
+  }, [page, pageNumber, style, names, stageLabels, images]);
 
   /** Converts a pointer movement on screen into page pixels. */
   function scale() {
