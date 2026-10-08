@@ -138,10 +138,14 @@ function designPrompt(member: CastMember, style: ComicStyle, fromPhotos: boolean
     fromPhotos
       ? `Likeness: the reference photo(s) show the real person. Draw them as an illustrated character in the art style above, fully stylised like every other character in a comic of this style (same simplification, linework, shading and proportions); never a realistic portrait or a traced photo. Keep them recognisable through face shape, distinctive features, skin tone, hair, facial hair, glasses and build.${stage ? ` Show them at this age: ${stage.look}` : ""} Details: ${appearance}`
       : `Appearance: ${appearance}`,
+    stage &&
+      "Age-appropriate details only: leave out any feature that doesn't fit this age (an adult's watch, beard, glasses or jewellery on a child; a child's features on an adult). Face shape, eyes, skin tone and hair colour must stay the same person.",
     "Outfit: one simple, typical everyday outfit for this person at this age (their clothes will change from scene to scene; this sheet is about who they are).",
     "Layout: on the left, the full body from head to toe, standing in a relaxed, natural pose facing the viewer; on the right, a large head-and-shoulders portrait of the same character with a warm expression. Same outfit in both. Plain light background.",
     "IMPORTANT: Do not draw any text, labels, names, colour swatches, logos or watermarks.",
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function describeIdentityTraits(member: CastMember): string {
