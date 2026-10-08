@@ -53,6 +53,7 @@ export async function askClaude<S extends z.ZodType>({
     inputTokens,
     outputTokens: response.usage.output_tokens,
     usd: claudeCost(MODEL, inputTokens, response.usage.output_tokens),
+    measured: true,
   });
 
   if (response.stop_reason === "refusal") {

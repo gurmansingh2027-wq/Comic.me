@@ -35,6 +35,7 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
         initialSince={comic.updatedAt}
         initialScript={ready ? comic.script : undefined}
         alreadyDrawn={keys.filter((_, i) => drawn[i])}
+        initialPublished={!!comic.explore?.published}
       />
       {comic.costLog && comic.costLog.length > 0 && (
         <details className="mx-auto max-w-xl text-sm text-neutral-600">
@@ -51,7 +52,10 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
               </li>
             ))}
           </ul>
-          <p className="mt-1 text-xs">Estimates from list prices in src/lib/costs.ts. The voice interview (well under $0.50) isn&apos;t included.</p>
+          <p className="mt-1 text-xs">
+            Priced from the usage each provider reported, at the list prices in src/lib/costs.ts
+            {comic.costLog.some((entry) => entry.usage?.some((usage) => usage.measured === false)) && " (a few items, like read-aloud, are estimates)"}.
+          </p>
         </details>
       )}
     </div>

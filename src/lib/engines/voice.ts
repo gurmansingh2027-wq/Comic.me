@@ -1,6 +1,8 @@
 import "server-only";
 import OpenAI from "openai";
+import { speechCost, transcriptionCost } from "../costs";
 import { requireEnv } from "../errors";
+import { recordUsage } from "../meter";
 
 // Voice: speech → text for what the user says, text → speech for the interviewer's replies.
 
@@ -20,7 +22,19 @@ export async function transcribe(audio: File): Promise<string> {
     model: TRANSCRIBE_MODEL,
     language: "en",
   });
-  return result.text.trim();
+  const text = result.text.trim();
+  // Billed per minute of audio; if OpenAI doesn't say how long it was, estimate from the words.
+  const reported = result.usage?.type === "duration" ? result.usage.seconds : undefined;
+  const seconds = reported ?? (text.split(/\s+/).filter(Boolean).length / 150) * 60;
+  recordUsage({
+    provider: "openai",
+    model: TRANSCRIBE_MODEL,
+    operation: "transcribe",
+    audioSeconds: Math.round(seconds),
+    usd: transcriptionCost(seconds),
+    measured: reported !== undefined,
+  });
+  return text;
 }
 
 export async function speak(text: string): Promise<ArrayBuffer> {
@@ -31,5 +45,6 @@ export async function speak(text: string): Promise<ArrayBuffer> {
     instructions: VOICE_STYLE,
     response_format: "mp3",
   });
+  recordUsage({ provider: "openai", model: SPEECH_MODEL, operation: "speak", usd: speechCost(text), measured: false });
   return response.arrayBuffer();
 }

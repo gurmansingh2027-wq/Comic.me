@@ -27,9 +27,11 @@ type Props = {
   initialSince?: string;
   initialScript?: ComicScript;
   alreadyDrawn: string[];
+  /** Whether the comic is shared on the Explore page. */
+  initialPublished?: boolean;
 };
 
-export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn }: Props) {
+export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn, initialPublished = false }: Props) {
   const style = getStyle(styleId)!;
   const router = useRouter();
   const [status, setStatus] = useState<ComicStatus>(initialStatus);
@@ -67,7 +69,7 @@ export default function ComicViewer({ comicId, styleId, initialStatus, initialEr
   if (status !== "ready" || !script) {
     return <WritingProgress status={status} error={error} since={since} onRetry={retryWriting} />;
   }
-  return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} />;
+  return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} initialPublished={initialPublished} />;
 }
 
 function WritingProgress({ status, error, since, onRetry }: { status: ComicStatus; error?: string; since: number; onRetry: () => void }) {
@@ -127,7 +129,9 @@ function ComicDrawing({
   script: initialScript,
   style,
   alreadyDrawn,
+  initialPublished,
 }: {
+  initialPublished: boolean;
   comicId: string;
   script: ComicScript;
   style: NonNullable<ReturnType<typeof getStyle>>;
@@ -340,6 +344,8 @@ function ComicDrawing({
         </div>
       </div>
 
+      {allReady && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
+
       {allReady && (
         <p className="text-center text-sm text-neutral-700">
           ✏️ Tip: drag or click any speech bubble or caption to move or edit it, or press <strong>Redraw</strong> on a panel you
@@ -371,6 +377,44 @@ function ComicDrawing({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** Opt-in sharing on the Explore page. Private by default; can be undone any time. */
+function ShareToExplore({ comicId, initialPublished }: { comicId: string; initialPublished: boolean }) {
+  const [published, setPublished] = useState(initialPublished);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    const response = await fetch(`/api/comics/${comicId}/explore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ published: !published }),
+    }).catch(() => null);
+    const data = await response?.json().catch(() => ({}));
+    if (response?.ok) setPublished(data.explore.published);
+    else setError(data?.error ?? "Couldn't change sharing. Please try again.");
+    setBusy(false);
+  }
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3 rounded border-2 border-ink bg-white p-3 text-sm">
+      <div>
+        <p className="font-bold">{published ? "🌍 Shared on Explore" : "🔒 Private"}</p>
+        <p className="text-neutral-600">
+          {published
+            ? "Others can see the cover and pages, and recreate its style and format (never your story, names or photos)."
+            : "Share it on Explore so others can be inspired. Only the finished art is shown; your photos never are."}
+        </p>
+        {error && <p className="font-bold text-zap">{error}</p>}
+      </div>
+      <button type="button" onClick={toggle} disabled={busy} className="rounded border-2 border-ink bg-pop px-3 py-1.5 font-bold disabled:opacity-50">
+        {published ? "Make private" : "Share on Explore"}
+      </button>
     </div>
   );
 }

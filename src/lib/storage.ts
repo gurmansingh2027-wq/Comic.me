@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { IMAGE_KEY_PATTERN, type Comic, type ComicScript } from "./comic";
 
@@ -64,6 +64,13 @@ export async function loadComic(id: string): Promise<Comic | null> {
     return upgradeLegacyComic(data as LegacyComic);
   }
   return data;
+}
+
+/** Every saved comic (used by the Explore page; fine for a local prototype, a database query later). */
+export async function listComics(): Promise<Comic[]> {
+  const ids = await readdir(ROOT).catch(() => [] as string[]);
+  const comics = await Promise.all(ids.filter(isValidComicId).map((id) => loadComic(id)));
+  return comics.filter((comic): comic is Comic => comic !== null);
 }
 
 // --- Character photos and designs (storage/comics/<id>/cast/<file>) -----------------------------

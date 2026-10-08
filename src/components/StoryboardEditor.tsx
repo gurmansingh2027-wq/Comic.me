@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { countPanels, MAX_PAGES, MAX_PANELS, type BalloonKind, type ComicScript, type DialogueLine, type LetterPos, type Page, type Panel, type PanelCast, type SceneContext, type Shot } from "@/lib/comic";
-import { drawingCost, formatUsd } from "@/lib/costs";
+import { drawingCost, formatUsd, type PicturePricing } from "@/lib/costs";
 import { fitLayout, LAYOUT_IDS, LAYOUTS, type LayoutId } from "@/lib/layouts";
 import { getStyle } from "@/lib/styles";
 import { ESTIMATES, formatDuration } from "./Countdown";
@@ -63,12 +63,15 @@ export default function StoryboardEditor({
   styleId,
   initialScript,
   castStages = [],
+  pricing,
 }: {
   comicId: string;
   styleId: string;
   initialScript: ComicScript;
   /** Each cast member's life stages, so panels can be switched between ages. */
   castStages?: CastStages;
+  /** Price of one picture for the current image model, to estimate the drawing cost. */
+  pricing: PicturePricing;
 }) {
   const router = useRouter();
   const style = getStyle(styleId)!;
@@ -224,7 +227,7 @@ export default function StoryboardEditor({
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3 shadow-[4px_4px_0_#111]">
         <p className="text-sm font-bold">
           {script.pages.length} pages · {totalPanels} panels · drawing takes about {formatDuration(pictures * ESTIMATES.picturePerComic + ESTIMATES.picture)} and
-          costs about {formatUsd(drawingCost(totalPanels, !!script.cover))}
+          costs about {formatUsd(drawingCost(script, pricing))}
           <span className="ml-3 font-normal">{saveState === "saving" ? "Saving…" : saveState === "error" ? "⚠️ Not saved" : "✓ Saved"}</span>
         </p>
         <button

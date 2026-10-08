@@ -203,7 +203,7 @@ export const MAX_STAGES_PER_CHARACTER = 4;
  */
 export type ComicStage = "storyboard" | "drawing";
 
-export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw";
+export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw" | "interview";
 
 /** One measured AI call: who served it, which model, what it did, and what it cost. */
 export type CostUsage = {
@@ -214,6 +214,10 @@ export type CostUsage = {
   outputTokens?: number;
   /** Image calls: size, quality and how many reference pictures were sent. */
   image?: { size: string; quality: string; references: number };
+  /** Voice calls: seconds of audio heard or spoken. */
+  audioSeconds?: number;
+  /** True when the price comes from usage the provider reported; false for an estimate. */
+  measured?: boolean;
   /** Times the call was retried after a rate limit (retries don't cost extra, but slow things down). */
   retries?: number;
   usd: number;
@@ -233,6 +237,10 @@ export type Comic = {
   cast?: CastMember[];
   status: ComicStatus;
   stage?: ComicStage;
+  /** Opt-in listing on the Explore page (private by default). */
+  explore?: { published: boolean; publishedAt: string };
+  /** Recreate: the format this comic was modelled on (another comic's remix preset). */
+  preset?: RemixPreset;
   /** How many single pictures the user has asked us to redraw (for limits and pricing later). */
   redraws?: number;
   /** Every paid AI call made for this comic, with its estimated price (see src/lib/costs.ts). */
@@ -265,4 +273,41 @@ export function imageUrl(comicId: string, key: string): string {
 
 export function countPanels(script: ComicScript): number {
   return script.pages.reduce((sum, page) => sum + page.panels.length, 0);
+}
+
+/**
+ * The reusable creative format of a comic, safe to share: style, structure, pacing and cover
+ * direction. Never contains names, photos, dialogue, story text or character designs.
+ */
+export type RemixPreset = {
+  sourceId: string;
+  title: string;
+  styleId: string;
+  pageCount: number;
+  panelCount: number;
+  layoutPattern: LayoutId[];
+  pacing: "sparse" | "balanced" | "dense";
+  coverApproach?: string;
+  coverTitleFont?: CoverFont;
+  coverPalette?: { fill: string; outline: string };
+};
+
+export function remixPresetFor(comic: Comic): RemixPreset | null {
+  const script = comic.script;
+  if (!script) return null;
+  const panelCount = countPanels(script);
+  const perPage = panelCount / Math.max(1, script.pages.length);
+  const design = script.cover?.design;
+  return {
+    sourceId: comic.id,
+    title: script.title,
+    styleId: comic.styleId,
+    pageCount: script.pages.length,
+    panelCount,
+    layoutPattern: script.pages.map((page) => page.layout),
+    pacing: perPage < 3 ? "sparse" : perPage > 4.2 ? "dense" : "balanced",
+    coverApproach: design?.approach,
+    coverTitleFont: design?.titleFont,
+    coverPalette: design ? { fill: design.titleFill, outline: design.titleOutline } : undefined,
+  };
 }
