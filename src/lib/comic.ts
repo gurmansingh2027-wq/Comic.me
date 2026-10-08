@@ -203,7 +203,7 @@ export const MAX_STAGES_PER_CHARACTER = 4;
  */
 export type ComicStage = "storyboard" | "drawing";
 
-export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw";
+export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw" | "interview";
 
 /** One measured AI call: who served it, which model, what it did, and what it cost. */
 export type CostUsage = {
@@ -214,6 +214,10 @@ export type CostUsage = {
   outputTokens?: number;
   /** Image calls: size, quality and how many reference pictures were sent. */
   image?: { size: string; quality: string; references: number };
+  /** Voice calls: seconds of audio heard or spoken. */
+  audioSeconds?: number;
+  /** True when the price comes from usage the provider reported; false for an estimate. */
+  measured?: boolean;
   /** Times the call was retried after a rate limit (retries don't cost extra, but slow things down). */
   retries?: number;
   usd: number;
