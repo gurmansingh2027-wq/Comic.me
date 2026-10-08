@@ -1,3 +1,4 @@
+import { drawingApproved, identityOnly } from "@/lib/comic";
 import { addCost } from "@/lib/costs";
 import { coverJob, drawImage, panelJob } from "@/lib/engines/art";
 import { metered } from "@/lib/meter";
@@ -24,23 +25,24 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
     const feedback = typeof body.feedback === "string" ? body.feedback.slice(0, 1000) : "";
     const comic = await loadComic(id);
     const script = comic?.script;
-    if (comic?.stage === "storyboard") {
-      throw new UserFacingError("Approve the storyboard before we start drawing.", 409);
-    }
-    if (!comic || !script || comic.status !== "ready" || !isValidImageKey(key)) {
+    if (!comic || !script || !isValidImageKey(key)) {
       throw new UserFacingError("We couldn't find that picture.", 404);
+    }
+    // The one gate in front of every paid picture: the storyboard must be approved first.
+    if (!drawingApproved(comic)) {
+      throw new UserFacingError("Approve the storyboard before we start drawing.", 409);
     }
     const style = getStyle(comic.styleId);
     if (!style) throw new UserFacingError("This comic's style no longer exists.", 500);
     const castRefs = (comic.cast ?? []).filter((member) => member.design?.approved).map((member) => ({
       name: member.name,
-      description: member.description,
+      description: identityOnly(member.description),
       importance: member.importance,
       designPath: castFilePath(id, member.design!.file),
       stages: (member.stages ?? []).map((stage) => ({
         id: stage.id,
         label: stage.label,
-        look: stage.look,
+        look: identityOnly(stage.look),
         designPath: stage.design?.approved ? castFilePath(id, stage.design.file) : undefined,
       })),
     }));

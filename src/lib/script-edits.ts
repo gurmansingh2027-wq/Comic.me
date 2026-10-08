@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { MAX_PAGES, MAX_PANELS, type ComicScript } from "./comic";
+import { BALLOON_KINDS, MAX_PAGES, MAX_PANELS, maxHeroPanels, type ComicScript } from "./comic";
 import { UserFacingError } from "./errors";
 import { fitLayout, LAYOUT_IDS } from "./layouts";
 import { loadComic, saveComic, withComicLock } from "./storage";
@@ -13,7 +13,7 @@ const Pos = z.object({ x: z.number().min(-0.2).max(1.2), y: z.number().min(-0.2)
 const Line = z.object({
   speaker: z.string().trim().min(1).max(100),
   side: z.enum(["left", "right"]),
-  kind: z.enum(["speech", "shout", "whisper", "thought"]),
+  kind: z.enum(BALLOON_KINDS),
   text: z.string().max(400),
   pos: Pos.optional(),
 });
@@ -25,6 +25,9 @@ const ContextSchema = z.object({
   timeOfDay: short,
   weather: short,
   event: short,
+  activity: short.optional(),
+  camera: short.optional(),
+  relationships: short.optional(),
   cast: z
     .array(z.object({ name: z.string().max(100), stage: z.string().max(40), wardrobe: short, emotion: short, action: short }))
     .max(8),
@@ -38,7 +41,11 @@ const PanelSchema = z.object({
   caption: z.string().max(400),
   captionPos: Pos.optional(),
   dialogue: z.array(Line).max(4),
+  sfx: z.string().max(40).optional(),
+  sfxPos: Pos.optional(),
   context: ContextSchema.optional(),
+  hero: z.boolean().optional(),
+  heroReason: z.string().max(300).optional(),
 });
 
 const PageSchema = z.object({ layout: z.enum(LAYOUT_IDS), panels: z.array(PanelSchema).min(1).max(6) });
@@ -66,6 +73,10 @@ export async function saveStoryboard(id: string, input: unknown): Promise<ComicS
   const edits = parsed.data;
   const panels = edits.pages.reduce((sum, page) => sum + page.panels.length, 0);
   if (panels > MAX_PANELS) throw new UserFacingError(`A comic can have at most ${MAX_PANELS} panels. Remove a few to continue.`);
+  const heroes = edits.pages.reduce((sum, page) => sum + page.panels.filter((panel) => panel.hero).length, 0);
+  if (heroes > maxHeroPanels(edits.pages.length)) {
+    throw new UserFacingError(`Pick at most ${maxHeroPanels(edits.pages.length)} hero panels: they're the moments we pull out all the stops for.`);
+  }
 
   return withComicLock(id, async () => {
     const comic = await loadComic(id);
@@ -101,7 +112,7 @@ export async function approveStoryboard(id: string): Promise<void> {
 }
 
 const LetteringEdit = z.object({
-  pages: z.array(z.object({ panels: z.array(PanelSchema.pick({ caption: true, captionPos: true, dialogue: true })) })),
+  pages: z.array(z.object({ panels: z.array(PanelSchema.pick({ caption: true, captionPos: true, dialogue: true, sfx: true, sfxPos: true })) })),
 });
 
 /**

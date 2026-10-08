@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { CastCommand } from "@/lib/cast-service";
 import { castFileUrl, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, MAX_STAGES_PER_CHARACTER, needsDesign, type CastMember, type CastState, type LifeStage } from "@/lib/comic";
+import { COPY } from "@/lib/copy";
 import { getStyle } from "@/lib/styles";
 import Countdown, { ESTIMATES } from "./Countdown";
 import Stepper from "./Stepper";
@@ -40,7 +41,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
       try {
         const current = await responseData<CastState>(await fetch(endpoint, { cache: "no-store" }));
         if (cancelled) return;
-        if (current.status !== "draft") { router.replace(`/comic/${comicId}`); return; }
+        if (current.status !== "draft") { router.replace(`/comic/${comicId}/storyboard`); return; }
         if (current.cast === null && !current.activity) {
           const initialized = await responseData<CastState>(await fetch(endpoint, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "initialize" }),
@@ -65,7 +66,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
         const fresh = await responseData<CastState>(await fetch(endpoint, { cache: "no-store" }));
         if (mounted.current) {
           setState(fresh);
-          if (fresh.status !== "draft") router.replace(`/comic/${comicId}`);
+          if (fresh.status !== "draft") router.replace(`/comic/${comicId}/storyboard`);
         }
       } catch { /* A transient poll failure leaves the saved progress visible. */ }
     }, 2000);
@@ -104,7 +105,8 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
     setError(null);
     try {
       await responseData(await fetch(`/api/comics/${comicId}`, { method: "POST" }));
-      router.push(`/comic/${comicId}`);
+      // Step 4: the storyboard is written and reviewed there. Nothing is drawn before approval.
+      router.push(`/comic/${comicId}/storyboard`);
     } catch (err) { setError((err as Error).message); setStarting(false); }
   }
 
@@ -117,8 +119,8 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
       <Stepper current="Characters" />
       <section className="comic-box space-y-3 bg-white p-6">
         <p className="text-sm font-bold uppercase tracking-widest text-neutral-600">{getStyle(styleId)?.label} · Cast studio</p>
-        <h1 className="font-title text-4xl tracking-wide sm:text-5xl">Meet your characters</h1>
-        <p className="max-w-3xl text-lg text-neutral-700">Make the people in your story feel like themselves. Upload photos or let AI suggest a look, then approve the designs for your main and supporting characters.</p>
+        <h1 className="font-title text-4xl tracking-wide sm:text-5xl">{COPY.characters.title}</h1>
+        <p className="max-w-3xl text-lg text-neutral-700">{COPY.characters.intro}</p>
         <p className="text-sm text-neutral-600">Minor characters can be drawn from their descriptions. Your progress is saved at this link.</p>
       </section>
 
@@ -149,7 +151,7 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
             <p className="font-bold">{state.ready ? "Your cast is ready." : "Approve every main and supporting character to continue."}</p>
             {(unsaved.length > 0 || adding) && <p className="text-sm text-neutral-600">Save or cancel your character edits before continuing.</p>}
             <button className="comic-box bg-zap px-8 py-3 font-title text-3xl tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={busy || !state.ready || unsaved.length > 0 || adding} onClick={startComic}>
-              {starting ? "Starting…" : "Write my storyboard →"}
+              {starting ? "Starting…" : COPY.characters.continue}
             </button>
           </section>
         </>
@@ -199,6 +201,22 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
       designRequest.current = request;
     }
     if (await perform("Drawing your character", ESTIMATES.characterDesign, request)) { designRequest.current = null; setFeedback(""); }
+  }
+  /**
+   * Approving the main look also draws every other age the story needs (from this look), so they
+   * are ready to approve without anyone having to ask for them.
+   */
+  async function approveMain() {
+    const approved = await perform("Approving this look", ESTIMATES.approve, { action: "approve", memberId: member.id, file: member.design!.file });
+    const after = approved?.cast?.find((m) => m.id === member.id);
+    for (const stage of after?.stages ?? []) {
+      if (stage.design && !stage.design.needsRedraw) continue;
+      if (stage.designAttempts >= MAX_DESIGN_ATTEMPTS) continue;
+      const drawn = await perform(`Drawing ${member.name} · ${stage.label}`, ESTIMATES.characterDesign, {
+        action: "design", memberId: member.id, stageId: stage.id, requestId: crypto.randomUUID(), expectedDesign: stage.design?.file, feedback: "",
+      });
+      if (!drawn) break;
+    }
   }
   /** Upload → the AI checks the photos → if they're usable, it designs the character straight away. */
   async function upload(files: FileList | null) {
@@ -254,14 +272,15 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
       </p>}
 
       {(needsDesign(member) || member.design) && <div className="space-y-3 border-t-2 border-ink pt-4">
-        {member.mainStage && <p className="text-sm font-bold">Main look · {member.mainStage.label}</p>}
+        {member.mainStage && <p className="text-sm font-bold">Main version · {member.mainStage.label}{/\d/.test(member.mainStage.ageRange) && !member.mainStage.label.includes(member.mainStage.ageRange) ? ` · age ~${member.mainStage.ageRange}` : ""}</p>}
         {member.design && <>
           {/* eslint-disable-next-line @next/next/no-img-element -- generated private design sheet */}
           <img src={castFileUrl(comicId, member.design.file)} alt={`Character design for ${member.name}`} className={`aspect-[3/2] w-full rounded border-2 border-ink bg-paper object-contain ${member.design.needsRedraw ? "opacity-50" : ""}`} />
           {member.design.needsRedraw && <p className="text-sm font-bold">The details changed since this design. Draw a new one to approve it.</p>}
           {awaitingApproval && <div className="space-y-2 rounded border-3 border-ink bg-pop p-4 text-center">
             <p className="font-bold">Happy with how {member.name} looks?</p>
-            <button className="comic-box w-full animate-pulse bg-zap px-6 py-3 font-title text-2xl tracking-wide text-white hover:animate-none disabled:animate-none disabled:opacity-50" disabled={busy || dirty} onClick={() => perform("Approving this look", ESTIMATES.approve, { action: "approve", memberId: member.id, file: member.design!.file })}>✓ Approve this look</button>
+            <button className="comic-box w-full animate-pulse bg-zap px-6 py-3 font-title text-2xl tracking-wide text-white hover:animate-none disabled:animate-none disabled:opacity-50" disabled={busy || dirty} onClick={approveMain}>✓ Approve this look</button>
+            {(member.stages ?? []).length > 0 && <p className="text-xs">Then we&apos;ll draw {member.name} at {(member.stages ?? []).map((stage) => stage.label.toLowerCase()).join(", ")} from this look.</p>}
             <p className="text-xs">Or describe a change below and draw a revised look.</p>
           </div>}
           {remaining > 0 && <label className="block space-y-1 text-sm font-bold">
@@ -307,38 +326,44 @@ function AddCharacter({ busy, act, onClose }: { busy: boolean; act: Action; onCl
   </section>;
 }
 
-/** The other ages a character appears at, each designed from the approved main look. */
+/**
+ * The other ages a character appears at, inferred from the story when the cast is planned.
+ * Only shown when the story actually spans years: no empty age UI otherwise.
+ */
 function LifeStages({ member, comicId, busy, act }: { member: CastMember; comicId: string; busy: boolean; act: Action }) {
   const stages = member.stages ?? [];
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ label: "", ageRange: "", look: "" });
+  const [draft, setDraft] = useState({ label: "", ageRange: "", look: "", outfit: "" });
   const mainApproved = !!member.design?.approved;
-  if (stages.length === 0 && !adding) {
-    return (
-      <button className="text-xs font-bold underline disabled:opacity-50" disabled={busy || stages.length >= MAX_STAGES_PER_CHARACTER} onClick={() => setAdding(true)}>
-        + Does {member.name} appear at another age (as a child, years later…)? Add an age
-      </button>
-    );
-  }
+  if (stages.length === 0) return null;
   return (
     <div className="space-y-3 border-t-2 border-ink pt-4">
-      <div>
-        <p className="font-title text-2xl tracking-wide">{member.name} at other ages</p>
-        <p className="text-xs text-neutral-600">
-          Your story shows {member.name} at different ages, so each one gets its own look, drawn from the approved main look so it&apos;s clearly the same person.
-        </p>
+      <div className="space-y-1">
+        <p className="font-title text-2xl tracking-wide">{COPY.characters.agesTitle(member.name)}</p>
+        <p className="text-xs text-neutral-600">{COPY.characters.agesIntro(member.name)}</p>
+        <ul className="flex flex-wrap gap-2 pt-1 text-sm" aria-label={`Ages the story needs for ${member.name}`}>
+          <li className="rounded-full border-2 border-ink bg-white px-3 py-0.5 font-bold">
+            {member.design?.approved ? "✓" : "○"} Main{member.mainStage ? ` · ${member.mainStage.label}` : ""}
+          </li>
+          {stages.map((stage) => (
+            <li key={stage.id} className={`rounded-full border-2 px-3 py-0.5 font-bold ${stage.design?.approved ? "border-green-700 bg-green-50 text-green-800" : "border-ink bg-paper"}`}>
+              {stage.design?.approved ? "✓" : stage.design && !stage.design.needsRedraw ? "◐" : "○"} {stage.label}{/\d/.test(stage.ageRange) && !stage.label.includes(stage.ageRange) ? ` · ~${stage.ageRange}` : ""}
+            </li>
+          ))}
+        </ul>
       </div>
-      {!mainApproved && <p className="rounded bg-paper p-2 text-sm">Approve the main look first; then we&apos;ll draw these ages from it.</p>}
+      {!mainApproved && <p className="rounded bg-paper p-2 text-sm">Approve the main look and we&apos;ll draw these ages from it straight away.</p>}
       {stages.map((stage) => <StageCard key={`${stage.id}/${stage.look}/${stage.ageRange}`} member={member} stage={stage} comicId={comicId} busy={busy} mainApproved={mainApproved} act={act} />)}
       {adding ? (
         <div className="space-y-2 rounded border-2 border-ink bg-paper p-3">
           <div className="grid gap-2 sm:grid-cols-2">
-            <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Label, e.g. Child" className={input} maxLength={80} />
-            <input value={draft.ageRange} onChange={(e) => setDraft({ ...draft, ageRange: e.target.value })} placeholder="Age, e.g. 7-10" className={input} maxLength={40} />
+            <input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} placeholder="Chapter, e.g. College" className={input} maxLength={80} />
+            <input value={draft.ageRange} onChange={(e) => setDraft({ ...draft, ageRange: e.target.value })} placeholder="Age, e.g. 19" className={input} maxLength={40} />
           </div>
-          <textarea value={draft.look} onChange={(e) => setDraft({ ...draft, look: e.target.value })} placeholder="How they look at this age (height, face, hair)" rows={2} className={input} maxLength={1500} />
+          <textarea value={draft.look} onChange={(e) => setDraft({ ...draft, look: e.target.value })} placeholder="How they look then (height, face, hair at the time)" rows={2} className={input} maxLength={1500} />
+          <input value={draft.outfit} onChange={(e) => setDraft({ ...draft, outfit: e.target.value })} placeholder="What they usually wore then (optional)" className={input} maxLength={600} />
           <div className="flex gap-2">
-            <button className={button} disabled={busy || !draft.label.trim() || !draft.ageRange.trim() || !draft.look.trim()} onClick={async () => { if (await act({ action: "stage-add", memberId: member.id, stage: draft })) { setAdding(false); setDraft({ label: "", ageRange: "", look: "" }); } }}>Add this age</button>
+            <button className={button} disabled={busy || !draft.label.trim() || !draft.ageRange.trim() || !draft.look.trim()} onClick={async () => { if (await act({ action: "stage-add", memberId: member.id, stage: { ...draft, outfit: draft.outfit.trim() || undefined } })) { setAdding(false); setDraft({ label: "", ageRange: "", look: "", outfit: "" }); } }}>Add this age</button>
             <button className={button} disabled={busy} onClick={() => setAdding(false)}>Cancel</button>
           </div>
         </div>
@@ -384,6 +409,7 @@ function StageCard({ member, stage, comicId, busy, mainApproved, act }: { member
         </span>
       </div>
       <textarea value={look} onChange={(e) => setLook(e.target.value)} rows={2} maxLength={1500} disabled={busy} className={`${input} resize-y text-sm`} aria-label={`How ${member.name} looks at this age`} />
+      {stage.outfit && <p className="text-xs text-neutral-600">👕 Usually wears: {stage.outfit}</p>}
       {changed && <button className={button} disabled={busy || !look.trim()} onClick={() => perform("Saving", 5, { action: "stage-update", memberId: member.id, stageId: stage.id, changes: { look: look.trim() } })}>Save</button>}
       {stage.design && <>
         {/* eslint-disable-next-line @next/next/no-img-element -- generated private design sheet */}

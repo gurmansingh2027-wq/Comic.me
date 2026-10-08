@@ -1,13 +1,14 @@
 import "server-only";
 import { createReadStream } from "node:fs";
 import OpenAI, { toFile } from "openai";
-import type { ComicScript, Importance, SceneContext } from "../comic";
+import type { ComicScript, CoverDesign, Importance, SceneContext } from "../comic";
 import { mentionsCharacter } from "../cast-matching";
 import { imageCost, imageTokenCost } from "../costs";
 import { requireEnv, UserFacingError } from "../errors";
 import { recordUsage } from "../meter";
-import { COVER_SIZE, describeShape, imageSizeForAspect, LAYOUTS, panelAspect } from "../layouts";
+import { COVER_SIZE, describeShape, frameNote, imageSizeForAspect, LAYOUTS, panelAspect } from "../layouts";
 import type { ComicStyle } from "../styles";
+import { familyGuidance } from "./cover";
 
 // Art Engine: draws the cover, each panel and character designs (no text — our renderer
 // letters on top). Approved character designs are passed in as reference images so every
@@ -26,6 +27,14 @@ export function imageQuality(): Quality {
   return QUALITIES.includes(value) ? value : "medium";
 }
 
+/** Hero panels (the book's 1-2 jaw-droppers) are drawn at higher quality and resolution. */
+export function heroQuality(): Quality {
+  const value = process.env.HERO_IMAGE_QUALITY?.trim() as Quality;
+  return QUALITIES.includes(value) ? value : "high";
+}
+/** Hero panels get about 1.6 megapixels instead of 1. */
+export const HERO_PIXELS = 1.6 * 1024 * 1024;
+
 const NO_TEXT =
   "IMPORTANT: Do not draw any text, letters, words, numbers, captions, speech balloons, sound-effect lettering, logos, signatures or watermarks anywhere in the image. No panel borders or multiple panels: one single continuous illustration.";
 
@@ -38,7 +47,15 @@ export type CastRef = {
   stages?: { id: string; label: string; look: string; designPath?: string }[];
 };
 
-export type ArtJob = { prompt: string; size: string; references: string[] };
+export type ArtJob = {
+  prompt: string;
+  size: string;
+  references: string[];
+  /** Overrides the default quality (hero panels). */
+  quality?: Quality;
+  /** For logs and test placeholders. */
+  label?: string;
+};
 
 /** Redrawing one picture: the current version plus what the user wants changed. */
 export type Revision = { currentPath: string; feedback: string };
@@ -91,6 +108,7 @@ function contextFor(script: ComicScript, context: SceneContext, castRefs: CastRe
   });
 
   const lines = people.map((person) => {
+    // Clothes always come from this panel's scene, never from the design sheet.
     const ref = castRefs.find((candidate) => sameName(candidate.name, person.name));
     const stage = person.stage ? ref?.stages?.find((candidate) => candidate.id === person.stage) : undefined;
     const designPath = stage ? stage.designPath : ref?.designPath;
@@ -110,34 +128,52 @@ function contextFor(script: ComicScript, context: SceneContext, castRefs: CastRe
     [context.period, context.timeOfDay, context.weather].filter(Boolean).length > 0 &&
       `When: ${[context.period, context.timeOfDay, context.weather].filter(Boolean).join(", ")}.`,
     context.event && `Occasion: ${context.event}.`,
+    context.activity && `What's happening: ${context.activity}.`,
+    context.relationships && `Between them: ${context.relationships}.`,
+    context.camera && `Camera: ${context.camera}.`,
     context.objects.length > 0 && `Important objects: ${context.objects.join(", ")}.`,
     context.continuity && `Continuity with the previous panel: ${context.continuity}`,
   ].filter(Boolean);
 
+  const clothes =
+    references.length > 0 &&
+    "Clothes: everyone wears the outfit listed for THIS panel (it fits their age, the place, the occasion, the weather and the era). The outfits on the reference design sheets are only examples and must not be copied.";
   return {
-    notes: [setting.join(" "), lines.length > 0 && `Characters:\n${lines.join("\n")}`].filter(Boolean).join("\n\n"),
+    notes: [setting.join(" "), lines.length > 0 && `Characters:\n${lines.join("\n")}`, clothes].filter(Boolean).join("\n\n"),
     references,
   };
+}
+
+/** Where the calm space for the title must be, in words the artist understands. */
+function titleSpace(design: CoverDesign | undefined): string {
+  const position = design?.titlePosition ?? "top";
+  const align = design?.titleAlign ?? "center";
+  const size = design?.titleSize ?? "huge";
+  const band = { top: "top", middle: "middle band", bottom: "bottom" }[position];
+  const side = align === "center" ? "" : ` ${align}`;
+  const amount = size === "huge" || size === "large" ? "a generous area" : "a small, quiet area";
+  return `Keep ${amount} at the ${band}${side} of the image calm and simple (flat colour, sky, shadow or paper) for the title, which our designers letter on top later.`;
 }
 
 export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastRef[] = [], revision?: Revision): ArtJob {
   const scene = script.cover?.scene ?? script.pages[0].panels[0].scene;
   const design = script.cover?.design;
   const cast = castFor(script, scene, castRefs, revision ? 1 : 0);
-  const titleSpace = design?.titlePosition === "bottom" ? "bottom quarter" : "top third";
   const prompt = [
     revisionNotes(revision),
-    "The front cover of a premium comic book, portrait format: a showpiece illustration by a world-class comic cover artist, the kind of cover that sells the book from across the shop.",
+    "The front cover of a premium comic book, portrait format, by a world-class cover artist and designer: an authored, art-directed image where illustration and graphic design work together.",
     `Art style: ${style.art}`,
     design && `Cover concept: ${design.concept}`,
+    `Composition family: ${familyGuidance(design?.approach)}. Commit to it fully; don't fall back to a centred character posing in front of a background.`,
     `Cover brief: ${scene}`,
     cast.notes,
-    `Composition: one striking focal image with a strong silhouette; dramatic perspective and depth; cinematic lighting; a bold, limited colour palette; meticulous, finished rendering with rich detail where it matters. Keep the ${titleSpace} of the image as calm, simple background (sky, shadow, soft gradient) because the title will be lettered there later.`,
+    "Craft: one clear idea readable at thumbnail size; a strong silhouette; deliberate negative space; a limited palette with one accent colour; finished, confident rendering where it matters and restraint everywhere else.",
+    titleSpace(design),
     NO_TEXT,
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { prompt, size: COVER_SIZE, references: [...(revision ? [revision.currentPath] : []), ...cast.references] };
+  return { prompt, size: COVER_SIZE, references: [...(revision ? [revision.currentPath] : []), ...cast.references], label: "cover" };
 }
 
 export function panelJob(
@@ -170,10 +206,15 @@ export function panelJob(
     flat[at + 1] && `Next panel will show: ${flat[at + 1].scene.slice(0, 240)}`,
   ].filter(Boolean);
 
+  const hero =
+    panel.hero &&
+    `HERO PANEL: this is one of the one or two moments in the whole book that readers will remember${panel.heroReason ? ` (${panel.heroReason})` : ""}. Make it a jaw-dropping, authored image, not a routine panel: ${style.direction.hero} Push the camera further than any other panel, give it a bold foreground shape and a clear focal point, and render the environment and light with splash-page ambition.`;
   const prompt = [
     revisionNotes(revision),
     `A single comic book panel illustration: ${describeShape(aspect)}.`,
+    frameNote(rect),
     `Art style: ${style.art}`,
+    hero,
     `Shot: ${panel.shot}.`,
     `Scene: ${panel.scene}`,
     cast.notes,
@@ -188,8 +229,10 @@ export function panelJob(
 
   return {
     prompt,
-    size: imageSizeForAspect(aspect),
+    size: panel.hero ? imageSizeForAspect(aspect, HERO_PIXELS) : imageSizeForAspect(aspect),
     references: [...(revision ? [revision.currentPath] : []), ...cast.references],
+    quality: panel.hero ? heroQuality() : undefined,
+    label: `panel ${pageIndex + 1}-${panelIndex + 1}${panel.hero ? " ★" : ""}`,
   };
 }
 
@@ -231,9 +274,9 @@ export function recordImageUsage(
   references: number,
   retries: number,
   reported?: OpenAI.Images.ImagesResponse["usage"],
+  quality: Quality = imageQuality(),
 ): void {
   const model = IMAGE_MODEL();
-  const quality = imageQuality();
   const image = { size, quality, references };
   if (!reported) {
     recordUsage({ provider: "openai", model, operation, image, retries, usd: imageCost(model, size, quality, references), measured: false });
@@ -254,14 +297,35 @@ export function recordImageUsage(
   });
 }
 
+/**
+ * Test mode (COMICME_FAKE_IMAGES=1): a grey placeholder instead of a paid picture, so the whole
+ * flow (storyboard approval, drawing, lettering, Explore) can be clicked through for free.
+ */
+export function fakeImagesEnabled(): boolean {
+  return process.env.COMICME_FAKE_IMAGES === "1";
+}
+
+export async function fakeImage(size: string, label: string): Promise<Buffer> {
+  const [width, height] = size.split("x").map(Number);
+  const safe = label.replace(/[<>&"]/g, "").slice(0, 60);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#d4d4d4"/><path d="M0 0L${width} ${height}M${width} 0L0 ${height}" stroke="#a3a3a3" stroke-width="6"/><text x="50%" y="50%" font-family="sans-serif" font-size="${Math.round(Math.min(width, height) / 9)}" text-anchor="middle" fill="#525252">TEST ${safe}</text></svg>`;
+  const { default: sharp } = await import("sharp");
+  return sharp(Buffer.from(svg)).webp({ quality: 70 }).toBuffer();
+}
+
 /** Draws one image; with reference pictures it uses OpenAI's edit endpoint so the characters match them. */
 export async function drawImage(job: ArtJob): Promise<Buffer> {
+  if (fakeImagesEnabled()) {
+    recordUsage({ provider: "openai", model: "test-placeholder", operation: "image.fake", image: { size: job.size, quality: "test", references: job.references.length }, usd: 0, measured: false });
+    return fakeImage(job.size, job.label ?? "picture");
+  }
   const client = imageClient();
+  const quality = job.quality ?? imageQuality();
   const common = {
     model: IMAGE_MODEL(),
     prompt: job.prompt,
     size: job.size,
-    quality: imageQuality(),
+    quality,
     output_format: "webp" as const,
     output_compression: 88,
   };
@@ -275,7 +339,7 @@ export async function drawImage(job: ArtJob): Promise<Buffer> {
     },
     () => retries++,
   );
-  recordImageUsage(job.references.length ? "image.edit" : "image.generate", job.size, job.references.length, retries, result.usage);
+  recordImageUsage(job.references.length ? "image.edit" : "image.generate", job.size, job.references.length, retries, result.usage, quality);
 
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) {

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { castReady, MAX_STAGES_PER_CHARACTER, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, type CastActivity, type CastMember, type CastState, type Comic } from "./comic";
 import { addCost } from "./costs";
 import { metered } from "./meter";
+import { fakeImagesEnabled } from "./engines/art";
 import { checkPhotos, describeDesign, drawDesign, planCast } from "./engines/characters";
 import { UserFacingError } from "./errors";
 import { castFilePath, loadCastFile, loadComic, saveCastFile, saveComic, withComicLock } from "./storage";
@@ -23,6 +24,7 @@ const StageFields = z.object({
   label: z.string().trim().min(1).max(80),
   ageRange: z.string().trim().min(1).max(40),
   look: z.string().trim().min(1).max(1500),
+  outfit: z.string().trim().max(600).optional(),
 });
 export const CastCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("initialize") }),
@@ -252,7 +254,8 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
             if (stage.design.approved) return;
             const image = await deps.loadCastFile(id, command.file);
             if (!image) throw new UserFacingError("The design is missing. Please generate it again.");
-            const described = await metered(() => deps.describeDesign(member, image, `${stage.label}, age ${stage.ageRange}`));
+            // Test mode: placeholders have nothing to describe, so keep the planned look.
+            const described = fakeImagesEnabled() ? { result: stage.look, usage: [] } : await metered(() => deps.describeDesign(member, image, `${stage.label}, age ${stage.ageRange}`));
             stage.look = described.result;
             addCost(comic, "design-description", `${member.name} · ${stage.label}`, described.usage);
             stage.design = { ...stage.design, approved: true, needsRedraw: false };
@@ -262,9 +265,9 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
           if (member.design.approved) return;
           const image = await deps.loadCastFile(id, command.file);
           if (!image) throw new UserFacingError("The design is missing. Please generate it again.");
-          const described = await metered(() =>
-            deps.describeDesign(member, image, member.mainStage ? `${member.mainStage.label}, age ${member.mainStage.ageRange}` : undefined),
-          );
+          const described = fakeImagesEnabled()
+            ? { result: member.description, usage: [] }
+            : await metered(() => deps.describeDesign(member, image, member.mainStage ? `${member.mainStage.label}, age ${member.mainStage.ageRange}` : undefined));
           member.description = described.result;
           addCost(comic, "design-description", member.name, described.usage);
           member.design.approved = true;

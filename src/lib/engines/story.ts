@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { MAX_PAGES, MAX_PANELS, type CastMember, type ComicScript, type Page, type RemixPreset } from "../comic";
+import { BALLOON_KINDS, identityOnly, MAX_PAGES, MAX_PANELS, maxHeroPanels, type CastMember, type ComicScript, type Page, type RemixPreset } from "../comic";
 import { askClaude } from "../claude";
 import { UserFacingError } from "../errors";
 import { fitLayout, LAYOUT_IDS, layoutMenu } from "../layouts";
@@ -10,20 +10,23 @@ import type { ComicStyle } from "../styles";
 //   1. The Comic Director builds a story bible, interprets the story in the chosen style, plans
 //      pages, and writes every panel WITH its structured scene context (who, which age, what they
 //      wear, where, when, mood, props, continuity), so pictures are built from facts.
-//   2. The editor rereads it as a first-time reader and sharpens captions and dialogue.
+//   2. The dialogue writer rewrites every caption and balloon with each person's voice, the
+//      relationship, their age, the scene, the tone and the style's dialogue direction (less text,
+//      more subtext), and offers alternative titles.
 
 const DialogueSchema = z.object({
   speaker: z.string().describe("Character name, exactly as in the character list"),
   side: z.enum(["left", "right"]).describe("Which side of the panel the speaker stands on"),
   kind: z
-    .enum(["speech", "shout", "whisper", "thought"])
-    .describe("Balloon type: normal speech, shouting/excited, whispering, or unspoken thought"),
-  text: z.string().describe("Balloon text, at most 20 words"),
+    .enum(BALLOON_KINDS)
+    .describe("Balloon type: speech; shout (yelling, excitement); whisper (quiet aside); thought (unspoken); robot (machines, AIs, monsters, announcements)"),
+  text: z.string().describe("Balloon text, usually under 12 words, at most 20. Wrap one or two stressed words in *asterisks* for emphasis, sparingly."),
 });
 
 const LetteringSchema = z.object({
   caption: z.string().describe("Narrator caption, at most 25 words. Empty string if none."),
   dialogue: z.array(DialogueSchema).describe("0 to 3 balloons, in reading order"),
+  sfx: z.string().describe('A sound effect lettered over the art, e.g. "KRAK!", "VROOM", "tik… tik…". Empty string for most panels.'),
 });
 
 const ContextSchema = z.object({
@@ -32,6 +35,9 @@ const ContextSchema = z.object({
   timeOfDay: z.string(),
   weather: z.string().describe('e.g. "monsoon rain", "clear winter night", "indoors"'),
   event: z.string().describe('What occasion this is, e.g. "college fest", "wedding reception", "ordinary school morning"'),
+  activity: z.string().describe('What is happening, e.g. "cramming for board exams", "first dance", "pitching investors"'),
+  camera: z.string().describe('Camera angle and lens, e.g. "low angle, wide lens", "over-the-shoulder, long lens", "top-down"'),
+  relationships: z.string().describe('Who these people are to each other in this moment, e.g. "proud father, anxious son"; empty if one person'),
   cast: z
     .array(
       z.object({
@@ -83,6 +89,8 @@ const ScriptSchema = z.object({
               "What the artist draws, as a vivid shot description in this style: composition, who is in frame (by name), poses, expressions, key props, mood. No dialogue.",
             ),
           context: ContextSchema,
+          hero: z.boolean().describe("True for the book's 1-2 jaw-dropping hero panels only"),
+          heroReason: z.string().describe('For hero panels, the narrative reason (e.g. "the reveal", "biggest joke"); otherwise empty'),
         }),
       ),
     }),
@@ -91,6 +99,7 @@ const ScriptSchema = z.object({
 
 const EditSchema = z.object({
   title: z.string(),
+  titleAlternatives: z.array(z.string()).describe("2-3 other strong titles for this comic, different in angle (max 6 words each)"),
   tagline: z.string(),
   pages: z.array(z.object({ panels: z.array(LetteringSchema) })),
 });
@@ -109,21 +118,26 @@ ${layoutMenu()}
    - Use "splash" for at most 2 of the very biggest moments. Vary layouts; don't repeat one layout on consecutive pages.
    - End pages on a hook or turn so the reader wants to turn the page. Give the final page a satisfying ending.
    - The number of panels on a page must exactly match its layout.
-5. **Panels.** For each panel: a shot, a vivid scene description, its scene context, and the caption and balloons.
+5. **Hero panels.** Pick the book's 1-2 jaw-dropping moments (3 at most for 10+ pages) and set hero: true with a heroReason. Choose them for narrative weight: a transformation, reveal, victory, defeat, first kiss, dramatic entrance, emotional peak, discovery, action climax, the biggest joke, a reunion or a major decision. Never pick a panel just because it comes first. Give each hero panel a big frame (a splash, or the big panel of its layout), an ambitious camera and a richly described scene: these are where the reader should stop and stare.
+6. **Panels.** For each panel: a shot, a vivid scene description, its scene context, and the caption and balloons.
 
 ## Scene context (filled in for every panel)
 - Track time precisely. When the story jumps in time, everyone's age changes: pick each person's life stage from the cast list ("main" or a stage id) so children look like children and the old look old.
 - Wardrobe comes from the scene, never from habit: age, era, place, activity, event, weather and culture decide what people wear (school uniform at school, casual at college, festive or wedding clothes at a wedding, workwear at work, sportswear on court, layers in winter). Within one continuous scene, clothes stay the same; a new day or occasion means new clothes.
 - Reuse the exact same location wording for panels in the same place, and note continuity (props in hand, spilled tea, rain-soaked clothes) from the previous panel.
+- Fill in the activity, the camera (angle and lens, chosen in this style's camera language) and the relationships in frame, so every picture is built from the same facts instead of being reinvented panel by panel.
 - Identity never changes: a person keeps their face, skin, hair identity and distinctive markers in every panel, at every age and in every outfit.
 
 ## Writing that makes sense to a stranger
 - Write for a reader who doesn't know these people. Every page must make sense on its own and in sequence.
 - Captions establish context: when and where we are, what changed, time jumps ("Two years later, Toronto."), and why the moment matters.
-- Dialogue reveals who people are to each other and what's at stake. Make lines specific to this story, not generic: not "You did it!" but "You actually got the Toronto job!"
+- Dialogue never narrates what the picture already shows. Not "We have arrived at college." Not "I am surprised." Characters talk the way real people do: with personality, humour, subtext, conflict and their relationship in every line.
+- Each person sounds like themselves (see the voices in the bible): a child sounds like a child, a stern father like a stern father. They must not all sound like the same narrator.
+- Make lines specific to this story, not generic: not "You did it!" but "You actually got the Toronto job!"
 - Introduce each person by name early, in a caption or dialogue.
-- Keep it short and readable: captions at most 25 words, balloons at most 20 words, at most 3 balloons per panel. Some panels can be silent if the picture says it.
-- Use balloon kinds: "shout" for excitement or yelling, "whisper" for quiet asides, "thought" for unspoken feelings.
+- Less is more: great comics use few words. Captions at most 25 words, balloons usually under 12 words (never over 20), at most 3 balloons per panel. Let some panels be silent.
+- Use balloon kinds: "shout" for yelling or excitement, "whisper" for quiet asides, "thought" for unspoken feelings, "robot" for machines, AIs, monsters and announcements. Mark one stressed word with *asterisks* now and then.
+- Sound effects (sfx) only where this style and moment want them (an engine, a slammed door, a crowd roar), most often in playful or action styles. Most panels have none.
 
 ## Truthfulness and originality
 - For real memories, stay true to the facts, names, places and order of events; you may dramatise small connecting moments and invent natural dialogue, but never invent major life events. For ideas and fantasies, build freely in their spirit.
@@ -134,27 +148,31 @@ ${layoutMenu()}
 - In each scene description, describe only what is visible. Name every character in frame; put each speaker on the side given in their balloon.
 - In the character list, describe identity only (no clothes). If the cast list is given, use it as authoritative.`;
 
-const EDITOR_PROMPT = `You are the editor at Comic.me. A writer has turned someone's real story into a comic script. Your job: make every caption and balloon land for a first-time reader.
+const EDITOR_PROMPT = `You are the dialogue writer and editor at Comic.me. A director has turned someone's real story into a comic script, with a story bible (logline, tone, arc, how each person talks) and scene context for every panel (who is there, their age, emotion, activity, relationships). Your job: make every caption and balloon sing for a first-time reader, in this comic's style.
 
-Read the original story, then the script page by page as if you had never heard the story. For every panel ask:
-- Do I know where and when we are, and what just changed? If not, fix the caption.
-- Do I know who is speaking and what they are to each other?
-- Is each line specific to this story, or vague and generic? Does it only make sense if I already know the story?
-- Is anything repetitive, flat, or over-explained? Does the dialogue sound like these particular people (see the voices in the bible)?
-- Do the ending and the page turns land emotionally?
+For every line, know: who is speaking (their personality and voice from the bible), who they're speaking to (the relationship in this moment), their age at this point in the story, the scene and activity, their emotion, the story's tone and the style's dialogue direction below.
 
-Rewrite captions and balloons where needed: clarity through specificity, not length. Captions at most 25 words, balloons at most 20 words, at most 3 balloons per panel. Keep the facts true to the original story.
+Rewrite where it helps:
+- Cut dialogue that narrates what we can already see ("We're here!", "I'm so happy."). Replace it with what this person would actually say, or with silence.
+- Give each person their own voice: rhythm, vocabulary, humour, what they avoid saying. A child sounds like a child; a stern father says less than he means.
+- Use subtext and conflict: people tease, deflect, interrupt, understate. Specific beats generic.
+- Use LESS text. Most balloons under 12 words. If a picture carries the moment, make the panel silent. Over-written comics feel like AI.
+- Captions: only what the reader needs (when, where, what changed, why it matters), in a voice that suits the style.
+- Balloon kinds: shout for yelling/excitement, whisper for asides, thought for the unspoken, robot for machines, AIs and monsters. Mark a stressed word with *asterisks* sparingly.
+- Sound effects (sfx): keep or add one only where it makes the panel more fun or more physical; otherwise leave it empty.
+- Do the ending and the page turns land? Does each hero panel get the line (or the silence) it deserves?
 
 Rules:
+- Keep the facts true to the original story.
 - Return exactly the same number of pages, and the same number of panels on each page, in the same order.
-- Each balloon's speaker must be someone in that panel's scene, and keep each speaker's side.
-- You may also polish the title and tagline.`;
+- Each balloon's speaker must be someone in that panel's scene; keep each speaker's side.
+- Polish the title and tagline, and offer 2-3 alternative titles with different angles (funny, poignant, bold).`;
 
 /** Pass 1: the writer. */
 export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[], preset?: RemixPreset): Promise<ComicScript> {
   // Recreate: borrow another comic's format (structure, pacing), never its content.
   const presetNotes = preset
-    ? `\n\n<format_template>\nThe person chose to recreate the format of a comic they liked. Use it as a template for structure and pacing, adapted to THIS story: about ${preset.pageCount} pages and ${preset.panelCount} panels, ${preset.pacing} pacing, page layouts in roughly this order: ${preset.layoutPattern.join(", ")}. Adjust where this story clearly needs it.\n</format_template>`
+    ? `\n\n<format_template>\nThe person chose to recreate the format of a comic they liked: reuse its creative recipe, never its content. Adapted to THIS story: about ${preset.pageCount} pages and ${preset.panelCount} panels, ${preset.pacing} pacing, page layouts in roughly this order: ${preset.layoutPattern.join(", ")}.${preset.heroCount ? ` ${preset.heroCount} hero panel(s), placed around ${(preset.heroPlacement ?? []).map((at) => `${Math.round(at * 100)}%`).join(" and ")} of the way through.` : ""}${preset.dialogue ? ` Dialogue treatment: ${preset.dialogue} (about ${Math.round((preset.silentShare ?? 0) * 100)}% silent panels${preset.sfxShare ? `, sound effects in about ${Math.round(preset.sfxShare * 100)}% of panels` : ""}).` : ""} Adjust where this story clearly needs it.\n</format_template>`
     : "";
   const castNotes =
     cast === undefined
@@ -187,6 +205,9 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
       const panels = page.panels.slice(0, 6).map((panel) => ({
         ...panel,
         dialogue: panel.dialogue.slice(0, 3),
+        sfx: panel.sfx.trim() || undefined,
+        hero: panel.hero || undefined,
+        heroReason: panel.hero ? panel.heroReason : undefined,
         // "main" means the character's main age; stored as "".
         context: { ...panel.context, cast: panel.context.cast.map((person) => ({ ...person, stage: person.stage === "main" ? "" : person.stage })) },
       }));
@@ -195,13 +216,21 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
   if (pages.length === 0) {
     throw new UserFacingError("The comic script came back empty. Please try again.", 502);
   }
+  // Hero panels are where we spend extra: keep the first few the director chose.
+  let heroes = 0;
+  for (const panel of pages.flatMap((page) => page.panels)) {
+    if (panel.hero && ++heroes > maxHeroPanels(pages.length)) {
+      panel.hero = undefined;
+      panel.heroReason = undefined;
+    }
+  }
 
   return {
     title: draft.title,
     tagline: draft.tagline,
     bible: draft.bible,
     characters: cast === undefined ? draft.characters : [
-      ...cast.map((member) => ({ name: member.name, appearance: member.description })),
+      ...cast.map((member) => ({ name: member.name, appearance: identityOnly(member.description) })),
       ...draft.characters.filter((character) => !cast.some((member) => member.name.normalize("NFKC").toLowerCase() === character.name.normalize("NFKC").toLowerCase())),
     ],
     cover: draft.cover,
@@ -210,10 +239,10 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
 }
 
 /** Pass 2: the editor. Only captions, balloons, title and tagline change; the art plan stays the same. */
-export async function polishScript(story: string, script: ComicScript): Promise<ComicScript> {
+export async function polishScript(story: string, script: ComicScript, style?: ComicStyle): Promise<ComicScript> {
   const edit = await askClaude({
     system: EDITOR_PROMPT,
-    user: `<original_story>\n${story}\n</original_story>\n\n<script>\n${JSON.stringify(script, null, 1)}\n</script>`,
+    user: `${style ? `Style: ${style.label}. Dialogue direction for this style: ${style.direction.dialogue}\n\n` : ""}<original_story>\n${story}\n</original_story>\n\n<script>\n${JSON.stringify(script, null, 1)}\n</script>`,
     schema: EditSchema,
     effort: "medium",
     operation: "dialogue-editor",
@@ -222,6 +251,9 @@ export async function polishScript(story: string, script: ComicScript): Promise<
   return {
     ...script,
     title: edit.title.trim() || script.title,
+    titleOptions: [...new Set([script.title, ...edit.titleAlternatives].map((title) => title.trim()).filter(Boolean))]
+      .filter((title) => title !== (edit.title.trim() || script.title))
+      .slice(0, 3),
     tagline: edit.tagline.trim() || script.tagline,
     pages: script.pages.map((page, p) => {
       const edited = edit.pages[p];
@@ -233,6 +265,7 @@ export async function polishScript(story: string, script: ComicScript): Promise<
           ...panel,
           caption: edited.panels[i].caption,
           dialogue: edited.panels[i].dialogue.slice(0, 3),
+          sfx: edited.panels[i].sfx.trim() || undefined,
         })),
       };
     }),

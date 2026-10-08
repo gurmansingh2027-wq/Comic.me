@@ -9,12 +9,13 @@ import {
   letteringBoxes,
   PAGE_H,
   PAGE_W,
+  type LetterKey,
   type LetteringBox,
 } from "@/lib/engines/render";
 import { renderFonts } from "@/lib/fonts";
 import type { ComicStyle } from "@/lib/styles";
 
-export type LetterRef = { panel: number; ref: "caption" | number };
+export type LetterRef = { panel: number; ref: LetterKey };
 
 type Props = {
   page: Page;
@@ -49,7 +50,7 @@ export default function WireframePage({ page, pageNumber, style, names, stageLab
       if (cancelled || !canvas) return;
       const buffer = createPageCanvas();
       const ctx = buffer.getContext("2d")!;
-      drawPage(ctx, page, pageNumber, images ?? [], style, renderFonts, images ? {} : { wireframe: { names, stageLabels } });
+      drawPage(ctx, page, pageNumber, images ?? [], style, renderFonts, images ? { speakers: names } : { wireframe: { names, stageLabels } });
       canvas.getContext("2d")!.drawImage(buffer, 0, 0);
       setBoxes(letteringBoxes(ctx, page, style, renderFonts));
     });
@@ -116,7 +117,7 @@ export default function WireframePage({ page, pageNumber, style, names, stageLab
             key={`${box.panel}-${box.ref}`}
             role="button"
             tabIndex={0}
-            aria-label={box.ref === "caption" ? `Caption, panel ${box.panel + 1}` : `Balloon ${Number(box.ref) + 1}, panel ${box.panel + 1}`}
+            aria-label={box.ref === "caption" ? `Caption, panel ${box.panel + 1}` : box.ref === "sfx" ? `Sound effect, panel ${box.panel + 1}` : `Balloon ${Number(box.ref) + 1}, panel ${box.panel + 1}`}
             title="Drag to move · drag the corner to resize · click to edit the text"
             onPointerDown={(event) => start(event, box, "move")}
             onKeyDown={(event) => event.key === "Enter" && onSelect({ panel: box.panel, ref: box.ref })}

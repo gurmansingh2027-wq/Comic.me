@@ -1,9 +1,8 @@
 import { notFound, redirect } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
 import Stepper from "@/components/Stepper";
-import { imageKeys } from "@/lib/comic";
+import { comicStep, imageKeys, onExplore } from "@/lib/comic";
 import { costBreakdown, formatUsd, totalCost } from "@/lib/costs";
-import { isStale } from "@/lib/pipeline";
 import { hasImage, loadComic } from "@/lib/storage";
 
 export async function generateMetadata(props: PageProps<"/comic/[id]">) {
@@ -16,12 +15,12 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
   const { id } = await props.params;
   const comic = await loadComic(id);
   if (!comic) notFound();
-  if (comic.status === "draft") redirect(`/comic/${id}/characters`);
-  if (comic.status === "ready" && comic.stage === "storyboard") redirect(`/comic/${id}/storyboard`);
+  // Step 5 only exists once the storyboard is approved; writing and review happen on step 4.
+  const step = comicStep(comic);
+  if (step === "characters") redirect(`/comic/${id}/characters`);
+  if (step === "storyboard" || !comic.script) redirect(`/comic/${id}/storyboard`);
 
-  const stale = isStale(comic);
-  const ready = comic.status === "ready" && comic.script;
-  const keys = ready ? imageKeys(comic.script!) : [];
+  const keys = imageKeys(comic.script);
   const drawn = await Promise.all(keys.map((key) => hasImage(id, key)));
 
   return (
@@ -30,12 +29,9 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
       <ComicViewer
         comicId={comic.id}
         styleId={comic.styleId}
-        initialStatus={stale ? "failed" : comic.status}
-        initialError={stale ? "Writing was interrupted. Please try again." : comic.error}
-        initialSince={comic.updatedAt}
-        initialScript={ready ? comic.script : undefined}
+        script={comic.script}
         alreadyDrawn={keys.filter((_, i) => drawn[i])}
-        initialPublished={!!comic.explore?.published}
+        initialPublished={onExplore(comic)}
       />
       {comic.costLog && comic.costLog.length > 0 && (
         <details className="mx-auto max-w-xl text-sm text-neutral-600">

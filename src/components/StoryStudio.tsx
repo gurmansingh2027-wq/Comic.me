@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { MAX_STORY_LENGTH, type RemixPreset } from "@/lib/comic";
-import { INTERVIEW_GREETING, type InterviewTurn } from "@/lib/interview";
+import { INTERVIEW_GREETING, recreateGreeting, type InterviewTurn } from "@/lib/interview";
 import { COMIC_STYLES, getStyle } from "@/lib/styles";
 import Stepper from "./Stepper";
 import StylePicker from "./StylePicker";
@@ -64,8 +64,19 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
     const parsed: Saved = saved ? { ...FRESH, ...JSON.parse(saved) } : FRESH;
     const restored = parsed.session ? parsed : { ...parsed, session: crypto.randomUUID() };
     // Recreate: start from the chosen comic's style; the format travels with the comic as a preset.
+    // A fresh interview opens with "What's your story?" for this format.
+    const fresh = restored.phase === "interview" && restored.turns.length <= 1;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring saved progress once on mount
-    setState(preset ? { ...restored, styleId: getStyle(preset.styleId)?.id ?? restored.styleId, presetId: preset.sourceId } : restored);
+    setState(
+      preset
+        ? {
+            ...restored,
+            styleId: getStyle(preset.styleId)?.id ?? restored.styleId,
+            presetId: preset.sourceId,
+            turns: fresh ? [{ role: "ai", text: recreateGreeting(preset.title) }] : restored.turns,
+          }
+        : restored,
+    );
     setLoaded(true);
   }, [preset]);
   useEffect(() => {
@@ -188,8 +199,10 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
         <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3">
           <p className="text-sm">
             ✨ <strong>Recreating the format of “{recreating.title}”</strong>: {getStyle(recreating.styleId)?.label} style, about{" "}
-            {recreating.pageCount} pages, {recreating.pacing} pacing{recreating.coverApproach ? `, ${recreating.coverApproach.replace(/-/g, " ")} cover` : ""}.
-            Your story, people and photos stay yours.
+            {recreating.pageCount} pages, {recreating.pacing} pacing
+            {recreating.heroCount ? `, ${recreating.heroCount} hero panel${recreating.heroCount > 1 ? "s" : ""}` : ""}
+            {recreating.dialogue ? `, ${recreating.dialogue} dialogue` : ""}
+            {recreating.coverApproach ? `, ${recreating.coverApproach.replace(/-/g, " ")} cover` : ""}. Your story, people and photos stay yours.
           </p>
           <button type="button" onClick={() => setState({ ...state, presetId: undefined })} className="text-xs font-bold underline">
             Don&apos;t use this format

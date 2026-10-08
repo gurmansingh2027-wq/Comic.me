@@ -47,3 +47,13 @@ next-env.d.ts
 # Conductor workspace files
 .context
 /benchmark
+
+# second dev server for tests
+/.next-test/
+
+# Third-party visual references stay local (copyrighted / licensed); only our own art and the notes are committed.
+/research/visual-references/*
+!/research/visual-references/README.md
+!/research/visual-references/02_current_boring_cover.png
+
+/.next-real/

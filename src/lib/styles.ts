@@ -21,6 +21,14 @@ export type Lettering = {
   captionInk: string;
   captionFont: LetteringFont;
   balloonFont: LetteringFont;
+  /** Balloon fill and outline (default white with black ink). */
+  balloonFill?: string;
+  balloonInk?: string;
+  /** Outline colours per speaker (by cast order), for styles where lettering is part of the fun. */
+  speakerAccents?: string[];
+  /** Sound-effect lettering colours. */
+  sfxFill?: string;
+  sfxOutline?: string;
 };
 
 export type StyleRecipe = {
@@ -44,6 +52,10 @@ export type StyleRecipe = {
     pacing: string;
     /** Rough number of panels per page this style likes (the director still varies it). */
     panelDensity: "sparse" | "balanced" | "dense";
+    /** How people talk in this style: given to the dialogue writer. */
+    dialogue: string;
+    /** What a hero panel (the book's 1-2 jaw-droppers) looks like in this style. */
+    hero: string;
   };
   cover: string;
   avoid: string[];
@@ -96,10 +108,12 @@ const RECIPES: StyleRecipe[] = [
       camera: "Extreme perspectives: low hero angles, high overheads, deep foreshortening, wide establishing shots with scale contrast, intense close-ups on eyes and hands.",
       pacing: "Build with tight panels, then release into big panels and full-page splashes at climaxes. End pages on cliffhangers.",
       panelDensity: "balanced",
+      dialogue: "Restrained and dramatic: few words that carry weight, clipped lines under pressure, a quiet line before the big moment. Captions like a narrator who knows this matters. Let splash panels breathe with little or no text.",
+      hero: "A jaw-dropping splash: extreme perspective (worm's-eye or vertiginous overhead), a bold foreground shape framing the hero, a silhouette against light, confident massed blacks, a richly detailed environment with scale, dramatic rim light and volumetric light, clear visual hierarchy, anatomy and pose with real weight and foreshortening.",
     },
     cover: "Blockbuster cover: one iconic, larger-than-life focal figure or moment, dramatic perspective, epic scale, lens-flare lighting and a bold title space.",
     avoid: ["soft painterly rendering without ink lines", "stiff or static poses", "flat lighting", "muddy colours", "plain empty backgrounds"],
-    lettering: { ...classicLettering, captionFill: "#fef08a" },
+    lettering: { ...classicLettering, captionFill: "#fef08a", sfxFill: "#fde047", sfxOutline: "#7f1d1d" },
   },
   {
     id: "chaos",
@@ -121,10 +135,12 @@ const RECIPES: StyleRecipe[] = [
       camera: "Mostly flat, sitcom-like framing for comic timing, interrupted by sudden extreme close-ups on horrified or deadpan faces, and characters staring at the reader.",
       pacing: "Fast: setup, escalation, punchline. Use beat panels (a silent reaction) before the punchline. Small panels for timing, one big panel for the payoff.",
       panelDensity: "dense",
+      dialogue: "Absurd and comedic: deadpan reactions to ridiculous events, escalating banter, one-liners, characters talking past each other, aliens and machines with strange voices (use the robot balloon). Short lines; the punchline lands in the last balloon or a silent beat.",
+      hero: "The biggest visual gag of the book at full scale: maximal absurd detail, a ridiculous creature or machine, extreme squash-and-stretch reaction, glowing sci-fi light, sight gags hidden everywhere, the hero deadpan in the middle of it.",
     },
     cover: "Absurd visual gag: the hero in a ridiculous sci-fi predicament with a deadpan expression, weird creatures, a portal or explosion, bold flat colours.",
     avoid: ["realistic rendering", "gritty shading", "copying any existing cartoon's characters or exact look"],
-    lettering: { ...classicLettering, captionFill: "#bbf7d0" },
+    lettering: { ...classicLettering, captionFill: "#bbf7d0", speakerAccents: ["#15803d", "#7e22ce", "#c2410c", "#0369a1"], sfxFill: "#a3e635", sfxOutline: "#2e1065" },
   },
   {
     id: "ink",
@@ -146,10 +162,12 @@ const RECIPES: StyleRecipe[] = [
       camera: "Calm, composed framing with lots of negative space; small figures in big spaces; telling close-ups of hands and objects.",
       pacing: "Unhurried: fewer, larger panels; silent panels; one idea per panel.",
       panelDensity: "sparse",
+      dialogue: "Sparse and literary: say less. Silence and captions do most of the work; dialogue is short, natural and specific. A single line can end a page.",
+      hero: "A masterful ink drawing: bold composition with a dramatic graphic shape, rich crosshatching and solid blacks against generous white paper, one accent colour used for the single thing that matters, an environment drawn with architectural care.",
     },
     cover: "Minimal, elegant ink composition: a single symbolic image in lots of white space, one accent colour, gallery-print quality.",
     avoid: ["full-colour painting", "digital gradients", "photographic rendering", "heavy outlines on everything"],
-    lettering: { pageColor: "#fbf8f1", captionFill: "#fbf8f1", captionInk: "#1c1917", captionFont: "hand", balloonFont: "hand" },
+    lettering: { pageColor: "#fbf8f1", captionFill: "#fbf8f1", captionInk: "#1c1917", captionFont: "hand", balloonFont: "hand", balloonFill: "#fbf8f1", balloonInk: "#1c1917", sfxFill: "#fbf8f1", sfxOutline: "#1c1917" },
   },
   {
     id: "manga",
@@ -170,10 +188,12 @@ const RECIPES: StyleRecipe[] = [
       camera: "Cinematic manga staging: extreme emotional close-ups, eye shots, dynamic diagonals, impact frames, wide establishing shots for new places.",
       pacing: "Decompressed: several small reaction panels around one big emotional or action panel. Use thought balloons generously.",
       panelDensity: "dense",
+      dialogue: "Manga emotional rhythm: short exclamations, trailing pauses (…), inner thoughts in thought balloons, a beat of silence before the emotional line. Reactions say as much as words.",
+      hero: "An impact frame: dynamic speed lines or focus lines, an extreme angle, dramatic screentone lighting, the emotional peak in a huge close-up or a full-body action freeze.",
     },
     cover: "Manga volume cover: a striking character-focused composition with dynamic pose, dramatic screentone or limited-colour treatment.",
     avoid: ["colour", "Western superhero rendering", "copying specific manga characters"],
-    lettering: { ...classicLettering, captionFill: "#ffffff" },
+    lettering: { ...classicLettering, captionFill: "#ffffff", sfxFill: "#ffffff", sfxOutline: "#111111" },
   },
 
   // --- Classic styles ------------------------------------------------------------------------
@@ -195,6 +215,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Clear, readable staging at eye level; wide shots that show the whole scene.",
       pacing: "Steady, even rhythm; regular grids.",
       panelDensity: "dense",
+      dialogue: "Crisp adventure banter: clear, witty, characterful lines; a little exposition through dialogue; each person instantly identifiable by how they talk.",
+      hero: "A grand clear-line vista: an architecturally precise, detailed environment with tiny readable figures, clean even lines, flat bright colour, perfect clarity at scale.",
     },
     cover: "Adventure-album cover: the heroes mid-adventure in a vivid, detailed setting.",
     avoid: ["hatching", "gradients", "dark gritty tones"],
@@ -218,6 +240,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Flat, stage-like framing.",
       pacing: "Strip rhythm: setup, beat, punchline.",
       panelDensity: "dense",
+      dialogue: "Setup and punchline, like a gag strip: short, snappy, a running joke, the last line lands the laugh.",
+      hero: "The punchline panel drawn big and bold: exaggerated reaction, clear staging, maximum comic timing.",
     },
     cover: "A warm, funny cover gag starring the main characters.",
     avoid: ["realistic rendering", "dramatic lighting"],
@@ -241,6 +265,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Friendly, varied framing with some dynamic angles.",
       pacing: "Balanced, bouncy rhythm.",
       panelDensity: "balanced",
+      dialogue: "Warm, funny and family-friendly: playful teasing, heartfelt lines kept simple, kids sounding like kids.",
+      hero: "A cinematic animated-film moment: dynamic camera, glowing light, expressive acting, a richly detailed world.",
     },
     cover: "A warm, joyful character moment with bright colours.",
     avoid: ["gritty textures", "harsh shadows"],
@@ -264,6 +290,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Observational, film-like framing.",
       pacing: "Slow and considered.",
       panelDensity: "balanced",
+      dialogue: "Conversational and naturalistic: people interrupt, hesitate and talk around what they mean. Subtext over statements.",
+      hero: "A painterly, cinematic full-page moment: dramatic composition and light, deep atmosphere, a quiet emotional peak.",
     },
     cover: "A quiet, evocative painted image with a literary feel.",
     avoid: ["superhero exaggeration", "glossy rendering"],
@@ -287,10 +315,12 @@ const RECIPES: StyleRecipe[] = [
       camera: "Dramatic low and high angles; faces half in shadow.",
       pacing: "Measured, suspenseful.",
       panelDensity: "balanced",
+      dialogue: "Clipped and hardboiled: terse dialogue, wry first-person captions, metaphors that bite, nothing said directly.",
+      hero: "A noir showpiece: extreme chiaroscuro, a silhouette in a doorway or rain-soaked street, venetian-blind shadows, one bold shape of light.",
     },
     cover: "A moody silhouette in hard light and shadow, with one red accent.",
     avoid: ["bright colours", "soft cheerful lighting"],
-    lettering: { pageColor: "#0b0b0b", captionFill: "#111111", captionInk: "#f5f5f5", captionFont: "typewriter", balloonFont: "comic" },
+    lettering: { pageColor: "#0b0b0b", captionFill: "#111111", captionInk: "#f5f5f5", captionFont: "typewriter", balloonFont: "comic", sfxFill: "#f5f5f5", sfxOutline: "#0b0b0b" },
   },
   {
     id: "watercolor",
@@ -310,6 +340,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Gentle, eye-level framing.",
       pacing: "Calm, with large picture-book panels.",
       panelDensity: "sparse",
+      dialogue: "Gentle and intimate: soft, warm lines, small honest words between people who love each other, lots of silence.",
+      hero: "A luminous, dreamy full-page painting: soft light, a vast gentle landscape or a tender close moment, delicate detail.",
     },
     cover: "A tender, glowing storybook scene.",
     avoid: ["hard digital edges", "harsh contrast"],
@@ -333,6 +365,8 @@ const RECIPES: StyleRecipe[] = [
       camera: "Classical, theatrical staging.",
       pacing: "Steady, narrated.",
       panelDensity: "balanced",
+      dialogue: "Storyteller narration with warmth and gravitas, like a family legend retold; natural Hinglish where people would really say it.",
+      hero: "A grand, ornate classic-comic tableau: heroic staging, rich period detail, bold flat colour and dramatic light.",
     },
     cover: "A heroic, ornate scene in the style of a classic illustrated legend.",
     avoid: ["modern glossy rendering"],
@@ -360,7 +394,14 @@ function artFor(recipe: StyleRecipe): string {
 function storytellingFor(recipe: StyleRecipe): string {
   const d = recipe.direction;
   const density = { sparse: "about 2-3 panels per page", balanced: "about 3-5 panels per page", dense: "about 4-6 panels per page" }[d.panelDensity];
-  return [`Interpretation: ${d.interpretation}`, `Camera: ${d.camera}`, `Pacing: ${d.pacing} Typically ${density}.`, `Covers: ${recipe.cover}`].join(" ");
+  return [
+    `Interpretation: ${d.interpretation}`,
+    `Camera: ${d.camera}`,
+    `Pacing: ${d.pacing} Typically ${density}.`,
+    `Dialogue: ${d.dialogue}`,
+    `Hero panels: ${d.hero}`,
+    `Covers: ${recipe.cover}`,
+  ].join(" ");
 }
 
 export const COMIC_STYLES: ComicStyle[] = RECIPES.map((recipe) => ({

@@ -2,9 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { countPanels, MAX_PAGES, MAX_PANELS, type BalloonKind, type ComicScript, type DialogueLine, type LetterPos, type Page, type Panel, type PanelCast, type SceneContext, type Shot } from "@/lib/comic";
+import { countPanels, MAX_PAGES, MAX_PANELS, maxHeroPanels, type BalloonKind, type ComicScript, type DialogueLine, type LetterPos, type Page, type Panel, type PanelCast, type SceneContext, type Shot } from "@/lib/comic";
 import { drawingCost, formatUsd, type PicturePricing } from "@/lib/costs";
 import { fitLayout, LAYOUT_IDS, LAYOUTS, type LayoutId } from "@/lib/layouts";
+import { COPY } from "@/lib/copy";
 import { getStyle } from "@/lib/styles";
 import { ESTIMATES, formatDuration } from "./Countdown";
 import Stepper from "./Stepper";
@@ -16,6 +17,7 @@ const KINDS: { kind: BalloonKind; label: string }[] = [
   { kind: "shout", label: "🗯 Shout" },
   { kind: "whisper", label: "🤫 Whisper" },
   { kind: "thought", label: "💭 Thought" },
+  { kind: "robot", label: "🤖 Robot" },
 ];
 const LAYOUT_NAMES: Record<LayoutId, string> = {
   splash: "Full-page splash",
@@ -30,6 +32,10 @@ const LAYOUT_NAMES: Record<LayoutId, string> = {
   five: "5 panels",
   "grid-6": "6 equal panels",
   "staggered-6": "6 staggered panels",
+  "slash-2": "⚡ 2 panels, diagonal split",
+  "diagonal-3": "⚡ 3 slanted bands",
+  "zigzag-4": "⚡ 4 panels, zigzag",
+  inset: "⚡ Full page + inset",
 };
 
 const field = "w-full rounded border-2 border-ink px-2 py-1.5 text-sm focus:outline-none focus:ring-4 focus:ring-pop";
@@ -42,6 +48,11 @@ type Selection = { page: number } & LetterRef;
 function coverChoice(script: ComicScript): number | undefined {
   const k = script.cover?.options?.findIndex((option) => option.design.concept === script.cover?.design?.concept);
   return k === undefined || k < 0 ? undefined : k;
+}
+
+/** The parts of the script the storyboard can change, as sent to the server. */
+function editsOf(script: ComicScript) {
+  return { title: script.title, tagline: script.tagline, coverChoice: coverChoice(script), coverScene: script.cover?.scene, pages: script.pages };
 }
 
 function emptyPanel(): Panel {
@@ -81,29 +92,32 @@ export default function StoryboardEditor({
   const [approveError, setApproveError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [selected, setSelected] = useState<Selection | null>(null);
-  const firstRender = useRef(true);
+  const [confirmingTitle, setConfirmingTitle] = useState(false);
+  const lastSaved = useRef<string | null>(null);
+  const locked = useRef(false);
   const names = useMemo(() => script.characters.map((c) => c.name), [script.characters]);
   const stageLabels = useMemo(
     () => Object.fromEntries(castStages.flatMap((member) => member.stages.map((stage) => [`${member.name}|${stage.id}`, stage.label]))),
     [castStages],
   );
 
-  // Save a moment after each change.
+  // Save a moment after each real change (not on load, and never after approval locked it).
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
+    const body = JSON.stringify(editsOf(script));
+    if (lastSaved.current === null) lastSaved.current = body;
+    if (body === lastSaved.current || locked.current) return;
     setSaveState("saving");
     const timer = setTimeout(async () => {
+      if (locked.current) return;
       try {
         const response = await fetch(`/api/comics/${comicId}/storyboard`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: script.title, tagline: script.tagline, coverChoice: coverChoice(script), coverScene: script.cover?.scene, pages: script.pages }),
+          body,
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error ?? "Couldn't save your changes.");
+        lastSaved.current = body;
         setSaveState("saved");
         setSaveError(null);
       } catch (err) {
@@ -115,6 +129,8 @@ export default function StoryboardEditor({
   }, [script, comicId]);
 
   const totalPanels = countPanels(script);
+  const heroCount = script.pages.reduce((sum, page) => sum + page.panels.filter((panel) => panel.hero).length, 0);
+  const heroLimit = maxHeroPanels(script.pages.length);
   const pictures = totalPanels + (script.cover ? 1 : 0);
 
   // --- Editing helpers ---------------------------------------------------------------------
@@ -133,33 +149,43 @@ export default function StoryboardEditor({
     setPanel(p, ref.panel, (panel) =>
       ref.ref === "caption"
         ? { ...panel, captionPos: pos ?? undefined }
-        : { ...panel, dialogue: panel.dialogue.map((line, k) => (k === ref.ref ? { ...line, pos: pos ?? undefined } : line)) },
+        : ref.ref === "sfx"
+          ? { ...panel, sfxPos: pos ?? undefined }
+          : { ...panel, dialogue: panel.dialogue.map((line, k) => (k === ref.ref ? { ...line, pos: pos ?? undefined } : line)) },
     );
   }
 
   function select(p: number, ref: LetterRef) {
     setSelected({ page: p, ...ref });
-    const id = ref.ref === "caption" ? `caption-${p}-${ref.panel}` : `line-${p}-${ref.panel}-${ref.ref}`;
+    const id = ref.ref === "caption" ? `caption-${p}-${ref.panel}` : ref.ref === "sfx" ? `sfx-${p}-${ref.panel}` : `line-${p}-${ref.panel}-${ref.ref}`;
     const input = document.getElementById(id) as HTMLInputElement | null;
     input?.focus({ preventScroll: true });
     input?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
+  /** Approving opens the title check first: the cover is designed around this title. */
+  function askToApprove() {
+    setApproveError(null);
+    setConfirmingTitle(true);
+  }
+
   async function approve() {
     setApproving(true);
     setApproveError(null);
+    locked.current = true;
     try {
       // Make sure the latest edits are saved first.
       const saved = await fetch(`/api/comics/${comicId}/storyboard`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: script.title, tagline: script.tagline, coverChoice: coverChoice(script), coverScene: script.cover?.scene, pages: script.pages }),
+        body: JSON.stringify(editsOf(script)),
       });
       if (!saved.ok) throw new Error((await saved.json().catch(() => ({}))).error ?? "Couldn't save your changes.");
       const response = await fetch(`/api/comics/${comicId}/storyboard`, { method: "POST" });
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? "Couldn't start drawing.");
       router.push(`/comic/${comicId}`);
     } catch (err) {
+      locked.current = false;
       setApproveError((err as Error).message);
       setApproving(false);
     }
@@ -170,12 +196,11 @@ export default function StoryboardEditor({
       <Stepper current="Storyboard" />
 
       <section className="comic-box space-y-4 bg-white p-6">
-        <p className="text-sm font-bold uppercase tracking-widest text-neutral-600">{style.label} · Storyboard</p>
-        <h1 className="font-title text-4xl tracking-wide sm:text-5xl">Check your storyboard</h1>
-        <p className="max-w-3xl text-neutral-700">
-          This is the plan for every page, before anything is drawn. Edit the dialogue, captions and what happens in each
-          panel; add or remove panels and pages; pick page layouts. <strong>Drag speech bubbles and captions anywhere</strong>,
-          drag their corner to resize them, or click one to edit its text. Nothing costs money until you approve.
+        <p className="text-sm font-bold uppercase tracking-widest text-neutral-600">{style.label} · {COPY.storyboard.kicker}</p>
+        <h1 className="font-title text-4xl tracking-wide sm:text-5xl">{COPY.storyboard.title}</h1>
+        <p className="max-w-3xl text-neutral-700">{COPY.storyboard.intro}</p>
+        <p className="max-w-3xl text-sm text-neutral-600">
+          <strong>Drag speech bubbles and captions anywhere</strong>, drag their corner to resize, or click one to edit the text.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="space-y-1 text-sm font-bold">
@@ -226,17 +251,17 @@ export default function StoryboardEditor({
 
       <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3 shadow-[4px_4px_0_#111]">
         <p className="text-sm font-bold">
-          {script.pages.length} pages · {totalPanels} panels · drawing takes about {formatDuration(pictures * ESTIMATES.picturePerComic + ESTIMATES.picture)} and
+          {script.pages.length} pages · {totalPanels} panels{heroCount > 0 && ` · ★ ${heroCount} hero`} · drawing takes about {formatDuration(pictures * ESTIMATES.picturePerComic + ESTIMATES.picture)} and
           costs about {formatUsd(drawingCost(script, pricing))}
           <span className="ml-3 font-normal">{saveState === "saving" ? "Saving…" : saveState === "error" ? "⚠️ Not saved" : "✓ Saved"}</span>
         </p>
         <button
           type="button"
-          onClick={approve}
+          onClick={askToApprove}
           disabled={approving || saveState === "error"}
           className="comic-box bg-zap px-6 py-2 font-title text-2xl tracking-wide text-white disabled:opacity-50"
         >
-          {approving ? "Starting…" : "✓ Approve & draw my comic →"}
+          {approving ? "Starting…" : COPY.storyboard.approve}
         </button>
       </div>
 
@@ -283,8 +308,19 @@ export default function StoryboardEditor({
               {page.panels.map((panel, i) => (
                 <div key={i} className={`space-y-2 rounded border-2 bg-white p-3 ${selected?.page === p && selected.panel === i ? "border-zap" : "border-ink"}`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-title text-xl tracking-wide">Panel {i + 1}</span>
+                    <span className="font-title text-xl tracking-wide">
+                      Panel {i + 1}
+                      {panel.hero && <span className="ml-2 rounded-full border-2 border-ink bg-pop px-2 py-0.5 align-middle font-sans text-xs font-bold">★ Hero panel</span>}
+                    </span>
                     <div className="flex flex-wrap items-center gap-1">
+                      <button
+                        className={`${small} ${panel.hero ? "bg-pop" : ""}`}
+                        disabled={!panel.hero && heroCount >= heroLimit}
+                        onClick={() => setPanel(p, i, (pn) => ({ ...pn, hero: !pn.hero || undefined, heroReason: pn.hero ? undefined : pn.heroReason }))}
+                        title={panel.hero ? "Make this an ordinary panel" : heroCount >= heroLimit ? `At most ${heroLimit} hero panels` : "Make this one of the book's jaw-dropping moments (drawn bigger and at higher quality)"}
+                      >
+                        {panel.hero ? "★ Hero" : "☆ Hero"}
+                      </button>
                       <select value={panel.shot} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, shot: e.target.value as Shot }))} className={`${field} w-auto py-0.5 text-xs`} aria-label="Camera shot">
                         {SHOTS.map((shot) => <option key={shot} value={shot}>{shot}</option>)}
                       </select>
@@ -305,6 +341,7 @@ export default function StoryboardEditor({
                       onChange={(context) => setPanel(p, i, (pn) => ({ ...pn, context }))}
                     />
                   )}
+                  {panel.hero && panel.heroReason && <p className="text-xs text-neutral-600">★ Why it&apos;s a hero moment: {panel.heroReason}</p>}
                   <div className="flex items-center gap-2">
                     <input id={`caption-${p}-${i}`} value={panel.caption} maxLength={400} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, caption: e.target.value }))} placeholder="Narration (caption box), optional" className={`${field} bg-amber-50`} />
                     {panel.captionPos && <button className={small} onClick={() => moveLettering(p, { panel: i, ref: "caption" }, null)} title="Put it back in its automatic spot">↺ Auto</button>}
@@ -327,6 +364,10 @@ export default function StoryboardEditor({
                       <input id={`line-${p}-${i}-${l}`} value={line.text} maxLength={400} onChange={(e) => setLine(p, i, l, { text: e.target.value })} placeholder="What they say" className={field} />
                     </div>
                   ))}
+                  <div className="flex items-center gap-2">
+                    <input id={`sfx-${p}-${i}`} value={panel.sfx ?? ""} maxLength={40} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, sfx: e.target.value || undefined }))} placeholder="Sound effect, optional (e.g. KRAK!)" className={`${field} w-56 font-bold uppercase`} />
+                    {panel.sfxPos && <button className={small} onClick={() => moveLettering(p, { panel: i, ref: "sfx" }, null)} title="Put it back in its automatic spot">↺ Auto</button>}
+                  </div>
                   {panel.dialogue.length < 4 && (
                     <button
                       className={small}
@@ -338,7 +379,7 @@ export default function StoryboardEditor({
                 </div>
               ))}
 
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button className={small} disabled={page.panels.length >= 6 || totalPanels >= MAX_PANELS} onClick={() => setPanels(p, (panels) => [...panels, emptyPanel()])}>
                   + Add a panel to this page
                 </button>
@@ -349,6 +390,12 @@ export default function StoryboardEditor({
                 >
                   + Add a page after this one
                 </button>
+                {(totalPanels >= MAX_PANELS || script.pages.length >= MAX_PAGES) && (
+                  <span className="text-xs text-neutral-600">
+                    {totalPanels >= MAX_PANELS ? `That's the ${MAX_PANELS}-panel maximum: remove a panel somewhere to add one.` : `That's the ${MAX_PAGES}-page maximum.`}
+                  </span>
+                )}
+                {totalPanels < MAX_PANELS && page.panels.length >= 6 && <span className="text-xs text-neutral-600">Six panels is the most a page can hold.</span>}
               </div>
             </div>
           </section>
@@ -358,13 +405,106 @@ export default function StoryboardEditor({
       <div className="text-center">
         <button
           type="button"
-          onClick={approve}
+          onClick={askToApprove}
           disabled={approving || saveState === "error"}
           className="comic-box bg-zap px-10 py-4 font-title text-3xl tracking-wide text-white disabled:opacity-50"
         >
-          {approving ? "Starting…" : "✓ Approve & draw my comic →"}
+          {approving ? "Starting…" : COPY.storyboard.approve}
         </button>
         {approveError && <p role="alert" className="mt-3 font-bold text-zap">{approveError}</p>}
+      </div>
+
+      {confirmingTitle && (
+        <TitleCheck
+          title={script.title}
+          alternatives={script.titleOptions ?? []}
+          titleFont={script.cover?.design?.titleFont}
+          busy={approving}
+          error={approveError}
+          onChange={(title) => setScript((current) => ({ ...current, title }))}
+          onConfirm={approve}
+          onCancel={() => setConfirmingTitle(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+const TITLE_FONT_VARS: Record<string, string> = {
+  bangers: "var(--font-title)",
+  bebas: "var(--font-bebas)",
+  playfair: "var(--font-playfair)",
+  marker: "var(--font-marker)",
+  abril: "var(--font-abril)",
+  cinzel: "var(--font-cinzel)",
+};
+
+/** "This is the title we'll design the cover around": shown before anything is drawn. */
+function TitleCheck({
+  title,
+  alternatives,
+  titleFont,
+  busy,
+  error,
+  onChange,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  alternatives: string[];
+  titleFont?: string;
+  busy: boolean;
+  error: string | null;
+  onChange: (title: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const others = alternatives.filter((option) => option.trim() && option.trim() !== title.trim()).slice(0, 3);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/60 p-4" role="dialog" aria-modal="true" aria-labelledby="title-check">
+      <div className="comic-box my-auto w-full max-w-xl space-y-5 bg-white p-6 text-center sm:p-8">
+        <p className="text-xs font-bold uppercase tracking-[0.3em] text-neutral-500">{COPY.title.kicker}</p>
+        {editing ? (
+          <input
+            value={title}
+            maxLength={120}
+            autoFocus
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && title.trim() && setEditing(false)}
+            className="w-full rounded border-3 border-ink px-3 py-2 text-center text-3xl font-bold focus:outline-none focus:ring-4 focus:ring-pop"
+            aria-label="Comic title"
+          />
+        ) : (
+          <h2 id="title-check" className="text-4xl leading-tight break-words sm:text-5xl" style={{ fontFamily: TITLE_FONT_VARS[titleFont ?? "bangers"] ?? TITLE_FONT_VARS.bangers }}>
+            {title}
+          </h2>
+        )}
+        <p className="text-neutral-700">{COPY.title.question}</p>
+        {others.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-bold text-neutral-500">{COPY.title.alternatives}</p>
+            <div className="flex flex-wrap justify-center gap-2">
+              {others.map((option) => (
+                <button key={option} type="button" onClick={() => onChange(option)} className="rounded-full border-2 border-ink bg-paper px-3 py-1 text-sm font-bold hover:bg-pop">
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {error && <p role="alert" className="font-bold text-zap">{error}</p>}
+        <div className="flex flex-wrap justify-center gap-3">
+          <button type="button" onClick={onConfirm} disabled={busy || !title.trim()} className="comic-box bg-zap px-6 py-2 font-title text-2xl tracking-wide text-white disabled:opacity-50">
+            {busy ? "Starting…" : COPY.title.yes}
+          </button>
+          <button type="button" onClick={() => setEditing(!editing)} disabled={busy} className="comic-box bg-white px-6 py-2 font-title text-2xl tracking-wide disabled:opacity-50">
+            {editing ? "Done" : COPY.title.change}
+          </button>
+        </div>
+        <button type="button" onClick={onCancel} disabled={busy} className="text-sm underline">
+          Back to the storyboard
+        </button>
       </div>
     </div>
   );

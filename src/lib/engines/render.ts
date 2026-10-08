@@ -3,8 +3,9 @@
 // screen and in downloads, so they always match.
 
 import { PDFDocument } from "pdf-lib";
-import type { ComicScript, CoverFont, DialogueLine, LetterPos, Page, Panel } from "../comic";
-import { GRID_COLS, GRID_ROWS, LAYOUTS, type Rect } from "../layouts";
+import type { ComicScript, CoverDesign, CoverFont, DialogueLine, LetterPos, Page, Panel } from "../comic";
+import { COVER_FONT_WEIGHT } from "../cover-fonts";
+import { GRID_COLS, GRID_ROWS, LAYOUTS, type PanelFrame, type Rect } from "../layouts";
 import type { ComicStyle, LetteringFont, Lettering } from "../styles";
 
 export type RenderFonts = Record<"title" | LetteringFont, string> & { cover: Record<CoverFont, string> };
@@ -17,19 +18,105 @@ const GUTTER = 26;
 
 type Box = { x: number; y: number; w: number; h: number };
 
+const UNIT_W = (PAGE_W - MARGIN * 2) / GRID_COLS;
+const UNIT_H = (PAGE_H - MARGIN * 2) / GRID_ROWS;
+
 export function panelBox(rect: Rect): Box {
-  const unitW = (PAGE_W - MARGIN * 2) / GRID_COLS;
-  const unitH = (PAGE_H - MARGIN * 2) / GRID_ROWS;
   return {
-    x: MARGIN + rect.x * unitW + GUTTER / 2,
-    y: MARGIN + rect.y * unitH + GUTTER / 2,
-    w: rect.w * unitW - GUTTER,
-    h: rect.h * unitH - GUTTER,
+    x: MARGIN + rect.x * UNIT_W + GUTTER / 2,
+    y: MARGIN + rect.y * UNIT_H + GUTTER / 2,
+    w: rect.w * UNIT_W - GUTTER,
+    h: rect.h * UNIT_H - GUTTER,
   };
 }
 
+type Px = [number, number];
+
+/** A panel on the page: where its art goes (`box`), its outline if slanted, and the safe area for text. */
+export type Frame = { box: Box; path?: Px[]; safe: Box; inset: boolean };
+
+/** Moves every edge of a convex outline inwards by `d` pixels (keeps gutters even on slanted panels). */
+function insetPolygon(points: Px[], d: number): Px[] {
+  const area = points.reduce((sum, [x1, y1], i) => {
+    const [x2, y2] = points[(i + 1) % points.length];
+    return sum + (x1 * y2 - x2 * y1);
+  }, 0);
+  const sign = area > 0 ? 1 : -1;
+  const lines = points.map(([x1, y1], i) => {
+    const [x2, y2] = points[(i + 1) % points.length];
+    const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+    // Inward normal for this winding.
+    const nx = (-(y2 - y1) / len) * sign;
+    const ny = ((x2 - x1) / len) * sign;
+    return { x: x1 + nx * d, y: y1 + ny * d, dx: x2 - x1, dy: y2 - y1 };
+  });
+  return lines.map((line, i) => {
+    const prev = lines[(i - 1 + lines.length) % lines.length];
+    const det = prev.dx * line.dy - prev.dy * line.dx;
+    if (Math.abs(det) < 1e-6) return [line.x, line.y] as Px;
+    const t = ((line.x - prev.x) * line.dy - (line.y - prev.y) * line.dx) / det;
+    return [prev.x + prev.dx * t, prev.y + prev.dy * t] as Px;
+  });
+}
+
+/** The biggest upright rectangle (roughly) inside a convex outline: where captions and balloons go. */
+function safeBox(points: Px[]): Box {
+  const xs = points.map(([x]) => x);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const samples = 16;
+  const columns = Array.from({ length: samples + 1 }, (_, k) => {
+    const x = minX + ((maxX - minX) * k) / samples;
+    const ys: number[] = [];
+    points.forEach(([x1, y1], i) => {
+      const [x2, y2] = points[(i + 1) % points.length];
+      if ((x >= Math.min(x1, x2) && x <= Math.max(x1, x2)) && x1 !== x2) ys.push(y1 + ((y2 - y1) * (x - x1)) / (x2 - x1));
+      else if (x1 === x2 && Math.abs(x - x1) < 1e-6) ys.push(y1, y2);
+    });
+    return { x, top: Math.min(...ys), bottom: Math.max(...ys) };
+  });
+  let best: Box = { x: minX, y: columns[0].top, w: 1, h: 1 };
+  for (let a = 0; a < columns.length; a++) {
+    for (let b = a + 2; b < columns.length; b++) {
+      const range = columns.slice(a, b + 1);
+      const top = Math.max(...range.map((c) => c.top));
+      const bottom = Math.min(...range.map((c) => c.bottom));
+      const w = columns[b].x - columns[a].x;
+      if (bottom - top > 0 && w * (bottom - top) > best.w * best.h) best = { x: columns[a].x, y: top, w, h: bottom - top };
+    }
+  }
+  return best;
+}
+
+function frameFor(frame: PanelFrame): Frame {
+  if (!frame.shape) {
+    const box = panelBox(frame);
+    return { box, safe: box, inset: !!frame.inset };
+  }
+  const outline = insetPolygon(frame.shape.map(([gx, gy]) => [MARGIN + gx * UNIT_W, MARGIN + gy * UNIT_H] as Px), GUTTER / 2);
+  const xs = outline.map(([x]) => x);
+  const ys = outline.map(([, y]) => y);
+  const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  return { box, path: outline, safe: safeBox(outline), inset: false };
+}
+
+export function pageFrames(page: Page): Frame[] {
+  return LAYOUTS[page.layout].panels.map(frameFor);
+}
+
+/** Each panel's safe area (for lettering and the editors' overlays). */
 export function pageBoxes(page: Page): Box[] {
-  return LAYOUTS[page.layout].panels.map(panelBox);
+  return pageFrames(page).map((frame) => frame.safe);
+}
+
+function framePath(ctx: CanvasRenderingContext2D, frame: Frame) {
+  ctx.beginPath();
+  if (frame.path) {
+    frame.path.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+  } else {
+    ctx.rect(frame.box.x, frame.box.y, frame.box.w, frame.box.h);
+  }
 }
 
 export function loadImage(src: string): Promise<HTMLImageElement> {
@@ -47,7 +134,7 @@ export async function ensureFontsLoaded(fonts: RenderFonts): Promise<void> {
     document.fonts.load(`700 30px ${fonts.comic}`),
     document.fonts.load(`30px ${fonts.hand}`),
     document.fonts.load(`30px ${fonts.typewriter}`),
-    ...Object.values(fonts.cover).map((family) => document.fonts.load(`900 120px ${family}`)),
+    ...(Object.entries(fonts.cover) as [CoverFont, string][]).map(([id, family]) => document.fonts.load(`${COVER_FONT_WEIGHT[id] ?? 400} 120px ${family}`)),
   ]);
 }
 
@@ -84,7 +171,29 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return lines;
 }
 
-type TextBlock = { lines: string[]; font: string; size: number; lineHeight: number; width: number; height: number };
+/** A word in a balloon or caption; *stressed* words are lettered in bold italic. */
+type Word = { text: string; em: boolean; width: number };
+type TextBlock = { lines: Word[][]; font: string; emFont: string; space: number; size: number; lineHeight: number; width: number; height: number };
+
+/** Splits text into words, reading *asterisks* as emphasis (which may span several words). */
+function parseEmphasis(text: string): { text: string; em: boolean }[] {
+  const words: { text: string; em: boolean }[] = [];
+  let em = false;
+  for (const raw of text.split(/\s+/).filter(Boolean)) {
+    // Leading punctuation may come before the opening * ("*mine*." / "(*really*)").
+    const opens = /^[^\w*]*\*/.test(raw);
+    const closes = raw.length > 1 && /\*[^\w*]*$/.test(raw);
+    const clean = raw.replace(/\*+/g, "");
+    if (opens) em = true;
+    if (clean) words.push({ text: clean, em });
+    if (closes || (opens && raw === "*")) em = false;
+  }
+  return words;
+}
+
+function lineWidth(line: Word[], space: number): number {
+  return line.reduce((sum, word) => sum + word.width, 0) + space * Math.max(0, line.length - 1);
+}
 
 function textBlock(
   ctx: CanvasRenderingContext2D,
@@ -95,15 +204,34 @@ function textBlock(
   maxWidth: number,
 ): TextBlock {
   const font = `${weight} ${size}px ${family}`;
+  const emFont = `italic ${Math.max(weight, 700)} ${size}px ${family}`;
   ctx.font = font;
-  const lines = wrapText(ctx, text, maxWidth);
+  const space = ctx.measureText(" ").width;
+  const words = parseEmphasis(text).map((word) => {
+    ctx.font = word.em ? emFont : font;
+    return { ...word, width: ctx.measureText(word.text).width };
+  });
+  const lines: Word[][] = [];
+  let line: Word[] = [];
+  for (const word of words) {
+    if (line.length && lineWidth([...line, word], space) > maxWidth) {
+      lines.push(line);
+      line = [word];
+    } else {
+      line.push(word);
+    }
+  }
+  if (line.length) lines.push(line);
+  ctx.font = font;
   const lineHeight = size * 1.18;
   return {
     lines,
     font,
+    emFont,
+    space,
     size,
     lineHeight,
-    width: Math.max(0, ...lines.map((l) => ctx.measureText(l).width)),
+    width: Math.max(0, ...lines.map((l) => lineWidth(l, space))),
     height: lines.length * lineHeight - (lineHeight - size),
   };
 }
@@ -115,10 +243,14 @@ function letterCase(text: string, font: LetteringFont): string {
 
 type Placed =
   | { type: "caption"; x: number; y: number; w: number; h: number; pad: number; block: TextBlock; pinned: boolean }
-  | { type: "balloon"; index: number; x: number; y: number; w: number; h: number; padX: number; padY: number; tail: number; line: DialogueLine; block: TextBlock; s: number; pinned: boolean };
+  | { type: "balloon"; index: number; x: number; y: number; w: number; h: number; padX: number; padY: number; tail: number; line: DialogueLine; block: TextBlock; s: number; pinned: boolean }
+  | { type: "sfx"; x: number; y: number; w: number; h: number; text: string; size: number; tilt: number; pinned: boolean };
 
-/** A placed caption or balloon in page pixels, for the storyboard editor's drag handles. */
-export type LetteringBox = { panel: number; ref: "caption" | number; x: number; y: number; w: number; h: number };
+/** What a lettering item is: the caption, a balloon (by index) or the sound effect. */
+export type LetterKey = "caption" | number | "sfx";
+
+/** A placed caption, balloon or sound effect in page pixels, for the editors' drag handles. */
+export type LetteringBox = { panel: number; ref: LetterKey; x: number; y: number; w: number; h: number };
 
 const toPixels = (pos: LetterPos) => ({ x: pos.x * PAGE_W, y: pos.y * PAGE_H, w: pos.w * PAGE_W });
 
@@ -187,13 +319,15 @@ function layoutLettering(
     const maxText = pinned
       ? Math.max(60, pinned.w - padX * 2)
       : Math.max(Math.min(box.w * share, 640) - padX * 2, Math.min(200, box.w - pad * 2 - padX * 2));
-    const font = lettering.balloonFont;
+    const font = line.kind === "robot" ? "typewriter" : lettering.balloonFont;
+    // Quiet lines are lettered smaller; shouts a little bigger.
+    const volume = line.kind === "whisper" ? 0.86 : line.kind === "shout" ? 1.08 : 1;
     const block = textBlock(
       ctx,
-      letterCase(line.text, font),
+      line.kind === "robot" ? line.text.toUpperCase() : letterCase(line.text, font),
       fonts[font],
       font === "comic" ? 700 : 400,
-      (font === "comic" ? 28 : 33) * scale,
+      (font === "comic" ? 28 : 33) * scale * volume,
       maxText,
     );
     const w = pinned ? pinned.w : block.width + padX * 2;
@@ -215,14 +349,39 @@ function layoutLettering(
 
   const auto = items.filter((item) => !item.pinned);
   const bottom = Math.max(box.y, ...auto.map((item) => item.y + item.h + (item.type === "balloon" ? item.tail : 0)));
+
+  // Sound effect: big and tilted near the bottom of the panel, unless the user moved it.
+  const sfx = panel.sfx?.trim();
+  if (sfx) {
+    const text = sfx.toUpperCase();
+    const auto = Math.min(Math.max(Math.min(box.w, box.h) * 0.2, 64), 190);
+    ctx.font = `${auto}px ${fonts.title}`;
+    const autoW = ctx.measureText(text).width + auto * 0.4;
+    const pinned = panel.sfxPos ? toPixels(panel.sfxPos) : null;
+    const size = pinned ? Math.min(Math.max(auto * (pinned.w / autoW), 40), 320) : auto;
+    ctx.font = `${size}px ${fonts.title}`;
+    const w = ctx.measureText(text).width + size * 0.4;
+    const h = size * 1.15;
+    const right = text.length % 2 === 0;
+    const x = pinned ? pinned.x : right ? box.x + box.w - w - pad : box.x + pad;
+    const y = pinned ? pinned.y : box.y + box.h - h - pad - box.h * 0.06;
+    items.push({ type: "sfx", x, y, w, h, text, size, tilt: right ? -7 : 6, pinned: !!pinned });
+  }
   return { items, bottom };
 }
 
 function drawTextLines(ctx: CanvasRenderingContext2D, block: TextBlock, x: number, y: number, align: "left" | "center") {
-  ctx.font = block.font;
-  ctx.textAlign = align;
+  ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  block.lines.forEach((line, i) => ctx.fillText(line, x, y + i * block.lineHeight));
+  block.lines.forEach((line, i) => {
+    let cursor = align === "center" ? x - lineWidth(line, block.space) / 2 : x;
+    for (const word of line) {
+      ctx.font = word.em ? block.emFont : block.font;
+      ctx.fillText(word.text, cursor, y + i * block.lineHeight);
+      cursor += word.width + block.space;
+    }
+  });
+  ctx.font = block.font;
 }
 
 /** Points around a rectangle's edge, each with its outward direction. */
@@ -252,13 +411,13 @@ function perimeter(x: number, y: number, w: number, h: number, spacing: number) 
   return points;
 }
 
-function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type: "balloon" }>, ink: string) {
+function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type: "balloon" }>, ink: string, fill: string, outline: string) {
   const { x, y, w, h, tail, line, s } = item;
   const left = line.side === "left";
-  const stroke = 4 * s;
+  const stroke = (line.kind === "whisper" ? 3 : outline === ink ? 4 : 5) * s;
   ctx.save();
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = ink;
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = line.kind === "whisper" ? "#6b6b6b" : outline;
   ctx.lineWidth = stroke;
   ctx.lineJoin = "round";
   if (line.kind === "whisper") ctx.setLineDash([10 * s, 8 * s]);
@@ -310,6 +469,32 @@ function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type
     ctx.stroke();
     drawTail(stroke);
     ctx.fill();
+  } else if (line.kind === "robot") {
+    // Machines, AIs and monsters: a geometric box with cut corners and a double outline.
+    const cut = Math.min(18 * s, h / 3);
+    const octagon = (inset: number) => {
+      ctx.beginPath();
+      ctx.moveTo(x + cut + inset, y + inset);
+      ctx.lineTo(x + w - cut - inset, y + inset);
+      ctx.lineTo(x + w - inset, y + cut + inset);
+      ctx.lineTo(x + w - inset, y + h - cut - inset);
+      ctx.lineTo(x + w - cut - inset, y + h - inset);
+      ctx.lineTo(x + cut + inset, y + h - inset);
+      ctx.lineTo(x + inset, y + h - cut - inset);
+      ctx.lineTo(x + inset, y + cut + inset);
+      ctx.closePath();
+    };
+    drawTail(0);
+    ctx.fill();
+    ctx.stroke();
+    octagon(0);
+    ctx.fill();
+    ctx.stroke();
+    drawTail(stroke);
+    ctx.fill();
+    ctx.lineWidth = stroke * 0.5;
+    octagon(7 * s);
+    ctx.stroke();
   } else {
     drawTail(0);
     ctx.fill();
@@ -323,8 +508,36 @@ function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type
   }
   ctx.restore();
 
-  ctx.fillStyle = ink;
+  ctx.fillStyle = line.kind === "whisper" ? "#3f3f3f" : ink;
   drawTextLines(ctx, item.block, x + w / 2, y + item.padY, "center");
+}
+
+/** A sound effect: chunky letters with a thick outline and a hard shadow, slightly tilted. */
+function drawSfx(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type: "sfx" }>, lettering: Lettering, fonts: RenderFonts) {
+  ctx.save();
+  ctx.translate(item.x + item.w / 2, item.y + item.h / 2);
+  ctx.rotate((item.tilt * Math.PI) / 180);
+  ctx.font = `${item.size}px ${fonts.title}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.letterSpacing = `${item.size * 0.03}px`;
+  ctx.lineWidth = item.size * 0.2;
+  ctx.strokeStyle = lettering.sfxOutline ?? "#111111";
+  ctx.strokeText(item.text, item.size * 0.06, item.size * 0.06);
+  ctx.strokeText(item.text, 0, 0);
+  ctx.fillStyle = lettering.sfxFill ?? "#facc15";
+  ctx.fillText(item.text, 0, 0);
+  ctx.restore();
+  ctx.letterSpacing = "0px";
+}
+
+/** A speaker's balloon outline: their accent colour in styles that use them, otherwise the style's ink. */
+function outlineFor(lettering: Lettering, speaker: string, speakers: string[]): string {
+  const accents = lettering.speakerAccents;
+  const index = speakers.findIndex((name) => name.toLowerCase() === speaker.toLowerCase());
+  if (!accents?.length || index < 0) return lettering.balloonInk ?? "#111111";
+  return accents[index % accents.length];
 }
 
 /** Lays out one panel's lettering, shrinking it a little if it would cover too much of a small panel. */
@@ -337,9 +550,11 @@ function panelLettering(ctx: CanvasRenderingContext2D, panel: Panel, box: Box, l
   return layout.items;
 }
 
-function drawLettering(ctx: CanvasRenderingContext2D, items: Placed[], lettering: Lettering) {
+function drawLettering(ctx: CanvasRenderingContext2D, items: Placed[], lettering: Lettering, fonts: RenderFonts, speakers: string[]) {
   for (const item of items) {
-    if (item.type === "caption") {
+    if (item.type === "sfx") {
+      drawSfx(ctx, item, lettering, fonts);
+    } else if (item.type === "caption") {
       ctx.fillStyle = lettering.captionFill;
       ctx.strokeStyle = lettering.captionInk;
       ctx.lineWidth = 3;
@@ -348,7 +563,7 @@ function drawLettering(ctx: CanvasRenderingContext2D, items: Placed[], lettering
       ctx.fillStyle = lettering.captionInk;
       drawTextLines(ctx, item.block, item.x + item.pad, item.y + item.pad, "left");
     } else {
-      drawBalloon(ctx, item, "#111111");
+      drawBalloon(ctx, item, "#111111", lettering.balloonFill ?? "#ffffff", outlineFor(lettering, item.line.speaker, speakers));
     }
   }
 }
@@ -359,7 +574,7 @@ export function letteringBoxes(ctx: CanvasRenderingContext2D, page: Page, style:
     page.panels[panel]
       ? panelLettering(ctx, page.panels[panel], box, style.lettering, fonts).map((item) => ({
           panel,
-          ref: item.type === "caption" ? ("caption" as const) : item.index,
+          ref: item.type === "balloon" ? item.index : item.type,
           x: item.x,
           y: item.y,
           w: item.w,
@@ -488,6 +703,19 @@ function drawWireframe(
   ctx.textBaseline = "top";
   ctx.fillStyle = "#6b665c";
   ctx.fillText(panel.shot.toUpperCase(), box.x + box.w - 14, box.y + 10);
+  if (panel.hero) {
+    // Hero panels get a badge, so the user sees where the extra effort goes.
+    ctx.font = `700 24px ${fonts.comic}`;
+    const label = "★ HERO PANEL";
+    const w = ctx.measureText(label).width + 24;
+    ctx.fillStyle = "#facc15";
+    ctx.strokeStyle = "#111111";
+    ctx.lineWidth = 3;
+    ctx.fillRect(box.x + box.w - w - 10, box.y + 40, w, 36);
+    ctx.strokeRect(box.x + box.w - w - 10, box.y + 40, w, 36);
+    ctx.fillStyle = "#111111";
+    ctx.fillText(label, box.x + box.w - 22, box.y + 46);
+  }
 }
 
 // --- Pages ------------------------------------------------------------------------------------
@@ -510,25 +738,36 @@ export function drawPage(
   images: (HTMLImageElement | null)[],
   style: ComicStyle,
   fonts: RenderFonts,
-  options: { wireframe?: { names: string[]; stageLabels?: Record<string, string> } } = {},
+  options: { wireframe?: { names: string[]; stageLabels?: Record<string, string> }; speakers?: string[] } = {},
 ): void {
   const { lettering } = style;
   const dark = !options.wireframe && isDark(lettering.pageColor);
   ctx.fillStyle = options.wireframe ? "#ffffff" : lettering.pageColor;
   ctx.fillRect(0, 0, PAGE_W, PAGE_H);
-  const boxes = pageBoxes(page);
+  const frames = pageFrames(page);
+  const boxes = frames.map((frame) => frame.safe);
+  const pageColor = options.wireframe ? "#ffffff" : lettering.pageColor;
 
-  // Pass 1: artwork, clipped to each panel.
-  boxes.forEach((box, i) => {
+  // Pass 1: artwork, clipped to each panel's outline (inset panels last, on top of the big image).
+  const order = frames.map((frame, i) => ({ frame, i })).sort((a, b) => Number(a.frame.inset) - Number(b.frame.inset));
+  for (const { frame, i } of order) {
     const panel = page.panels[i];
-    if (!panel) return;
+    if (!panel) continue;
+    const box = frame.box;
+    if (frame.inset) {
+      // A frame of page colour separates the inset from the image underneath.
+      ctx.fillStyle = pageColor;
+      ctx.fillRect(box.x - GUTTER, box.y - GUTTER, box.w + GUTTER * 2, box.h + GUTTER * 2);
+    }
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(box.x, box.y, box.w, box.h);
+    framePath(ctx, frame);
     ctx.clip();
     const image = images[i];
     if (options.wireframe) {
-      drawWireframe(ctx, panel, box, options.wireframe.names, fonts, options.wireframe.stageLabels);
+      // Sketch inside the panel's safe area, so slanted edges never cut off figures or notes.
+      ctx.fillStyle = "#fbfaf7";
+      ctx.fillRect(box.x, box.y, box.w, box.h);
+      drawWireframe(ctx, panel, frame.safe, options.wireframe.names, fonts, options.wireframe.stageLabels);
     } else if (image) {
       drawCoverFit(ctx, image, box);
     } else {
@@ -538,13 +777,15 @@ export function drawPage(
     ctx.restore();
     ctx.strokeStyle = dark ? "#e5e5e5" : "#111111";
     ctx.lineWidth = options.wireframe ? 3 : 5;
-    ctx.strokeRect(box.x, box.y, box.w, box.h);
-  });
+    ctx.lineJoin = "miter";
+    framePath(ctx, frame);
+    ctx.stroke();
+  }
 
   // Pass 2: lettering on top of everything, so a balloon the user moved can cross a panel border.
   boxes.forEach((box, i) => {
     const panel = page.panels[i];
-    if (panel) drawLettering(ctx, panelLettering(ctx, panel, box, lettering, fonts), lettering);
+    if (panel) drawLettering(ctx, panelLettering(ctx, panel, box, lettering, fonts), lettering, fonts, options.speakers ?? options.wireframe?.names ?? []);
   });
 
   ctx.fillStyle = dark ? "#a3a3a3" : "#555555";
@@ -554,7 +795,69 @@ export function drawPage(
   ctx.fillText(String(pageNumber), PAGE_W / 2, PAGE_H - MARGIN / 2);
 }
 
-/** Draws the front cover: full-bleed art, big title, tagline. */
+// --- Cover --------------------------------------------------------------------------------------
+
+/** Average brightness (0–255) of a region of what's already drawn, in page coordinates. */
+function regionLuminance(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): number {
+  const t = ctx.getTransform();
+  const px = Math.max(0, Math.floor(x * t.a + t.e));
+  const py = Math.max(0, Math.floor(y * t.d + t.f));
+  const pw = Math.max(1, Math.min(ctx.canvas.width - px, Math.ceil(w * t.a)));
+  const ph = Math.max(1, Math.min(ctx.canvas.height - py, Math.ceil(h * t.d)));
+  try {
+    const data = ctx.getImageData(px, py, pw, ph).data;
+    let sum = 0;
+    let count = 0;
+    const step = Math.max(4, Math.floor(data.length / 4 / 4000)) * 4;
+    for (let i = 0; i < data.length; i += step) {
+      sum += data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11;
+      count++;
+    }
+    return count ? sum / count : 128;
+  } catch {
+    return 128; // e.g. a tainted canvas: assume mid-grey and use a backing behind the text.
+  }
+}
+
+function luminanceOf(color: string): number {
+  const n = parseInt(color.replace("#", ""), 16);
+  return ((n >> 16) & 255) * 0.3 + ((n >> 8) & 255) * 0.59 + (n & 255) * 0.11;
+}
+
+const SIZE_STEPS: Record<NonNullable<CoverDesign["titleSize"]>, { max: number; min: number; width: number }> = {
+  huge: { max: 250, min: 110, width: 1 },
+  large: { max: 190, min: 90, width: 0.86 },
+  medium: { max: 128, min: 64, width: 0.66 },
+  small: { max: 84, min: 46, width: 0.5 },
+};
+
+/** The full title treatment, with sensible defaults for covers designed before these options existed. */
+function titleStyle(design: CoverDesign | undefined) {
+  const font = design?.titleFont ?? "bangers";
+  return {
+    font,
+    weight: COVER_FONT_WEIGHT[font] ?? 400,
+    fill: design?.titleFill ?? "#facc15",
+    outline: design?.titleOutline ?? "#111111",
+    position: design?.titlePosition ?? "top",
+    size: design?.titleSize ?? "huge",
+    align: design?.titleAlign ?? "center",
+    upper: design?.titleCase ? design.titleCase === "upper" : !["playfair", "bodoni", "fraunces", "caveat"].includes(font),
+    tracking: Math.min(Math.max(design?.titleTracking ?? 0, -0.05), 0.4),
+    treatment: design?.titleTreatment ?? (design ? "outline" : "outline"),
+    band: design?.titleBand ?? "#111111",
+    rotation: Math.min(Math.max(design?.titleRotation ?? 0, -8), 8),
+  };
+}
+
+const COVER_MARGIN = 96;
+
+/**
+ * Draws the front cover: full-bleed art, then the title and tagline lettered by our code (so
+ * they're always spelled right and stay editable), art-directed per comic: size, alignment,
+ * tracking, tilt and treatment come from the cover design. The tagline checks the art behind it
+ * and picks a readable colour and backing, so it can never disappear into a light background.
+ */
 export function drawCover(
   ctx: CanvasRenderingContext2D,
   script: ComicScript,
@@ -570,87 +873,168 @@ export function drawCover(
     ctx.fillRect(0, 0, PAGE_W, PAGE_H);
   }
 
-  // Publisher badge.
-  ctx.fillStyle = "#facc15";
-  ctx.strokeStyle = "#111111";
-  ctx.lineWidth = 5;
-  ctx.fillRect(56, 56, 250, 76);
-  ctx.strokeRect(56, 56, 250, 76);
-  ctx.fillStyle = "#111111";
-  ctx.font = `52px ${fonts.title}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("COMIC.ME", 56 + 125, 56 + 40);
-
   const design = script.cover?.design;
-  const family = design ? fonts.cover[design.titleFont] : fonts.title;
-  const weight = design && ["playfair", "cinzel"].includes(design.titleFont) ? 900 : 400;
-  const keepCase = design?.titleFont === "playfair";
-  const fill = design?.titleFill ?? "#facc15";
-  const outline = design?.titleOutline ?? "#111111";
-  const atBottom = design?.titlePosition === "bottom";
+  const t = titleStyle(design);
+  const family = fonts.cover[t.font] ?? fonts.title;
+  const contentW = PAGE_W - COVER_MARGIN * 2;
+  const steps = SIZE_STEPS[t.size];
+  const maxW = contentW * steps.width;
+  const title = t.upper ? script.title.toUpperCase() : script.title;
 
-  // Title: as big as fits, up to three lines.
-  const title = keepCase ? script.title : script.title.toUpperCase();
-  let size = 230;
-  let lines: string[] = [];
-  for (; size >= 90; size -= 10) {
-    ctx.font = `${weight} ${size}px ${family}`;
-    lines = wrapText(ctx, title, PAGE_W - 160);
-    if (lines.length <= 3 && lines.every((l) => ctx.measureText(l).width <= PAGE_W - 160)) break;
+  // Fit the title: as big as this size allows, at most three lines (stacked: one word per line).
+  const setFont = (size: number) => {
+    ctx.font = `${t.weight} ${size}px ${family}`;
+    ctx.letterSpacing = `${t.tracking * size}px`;
+  };
+  type Line = { text: string; size: number };
+  let lines: Line[] = [];
+  if (t.treatment === "stacked") {
+    const words = title.split(/\s+/).filter(Boolean);
+    const rows = words.length > 4 ? wrapToRows(words, 3) : words;
+    lines = rows.map((text) => {
+      let size = steps.max * 1.3;
+      for (; size > steps.min; size -= 6) {
+        setFont(size);
+        if (ctx.measureText(text).width <= maxW) break;
+      }
+      return { text, size };
+    });
+  } else {
+    let size = steps.max;
+    let wrapped: string[] = [];
+    for (; size >= steps.min; size -= 6) {
+      setFont(size);
+      wrapped = wrapText(ctx, title, maxW);
+      if (wrapped.length <= 3 && wrapped.every((l) => ctx.measureText(l).width <= maxW)) break;
+    }
+    lines = wrapped.map((text) => ({ text, size: Math.max(size, steps.min) }));
   }
-  const lineHeight = size * 0.98;
-  const blockHeight = lines.length * lineHeight;
-  const titleTop = atBottom ? PAGE_H - 130 - blockHeight : 175;
-  ctx.textAlign = "center";
+  const lineGap = (size: number) => size * (t.treatment === "stacked" ? 0.92 : 1.0);
+  const blockH = lines.reduce((sum, line) => sum + lineGap(line.size), 0);
+  const widths = lines.map((line) => {
+    setFont(line.size);
+    return ctx.measureText(line.text).width;
+  });
+  const blockW = Math.max(...widths, 1);
+
+  const taglineText = script.tagline.trim();
+  const titleTop =
+    t.position === "bottom"
+      ? PAGE_H - COVER_MARGIN - (taglineText && design ? 40 : 0) - blockH - 40
+      : t.position === "middle"
+        ? (PAGE_H - blockH) / 2
+        : COVER_MARGIN + 90;
+  const anchorX = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN : PAGE_W / 2;
+  const blockLeft = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN - blockW : (PAGE_W - blockW) / 2;
+
+  // If the art behind the title would swallow it, add an outline and shadow automatically.
+  const behind = regionLuminance(ctx, blockLeft, titleTop, blockW, blockH);
+  const weakContrast = Math.abs(behind - luminanceOf(t.fill)) < 70;
+  const treatment = weakContrast && (t.treatment === "solid" || t.treatment === "hollow" || t.treatment === "stacked") ? "shadow" : t.treatment;
+
+  ctx.save();
+  if (t.rotation) {
+    const cx = blockLeft + blockW / 2;
+    const cy = titleTop + blockH / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate((t.rotation * Math.PI) / 180);
+    ctx.translate(-cx, -cy);
+  }
+  if (treatment === "band") {
+    const pad = (lines[0]?.size ?? 100) * 0.28;
+    ctx.fillStyle = t.band;
+    ctx.fillRect(t.align === "center" ? 0 : blockLeft - pad, titleTop - pad * 0.7, t.align === "center" ? PAGE_W : blockW + pad * 2, blockH + pad * 1.1);
+  }
+  ctx.textAlign = t.align;
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
-  lines.forEach((line, i) => {
-    const y = titleTop + i * lineHeight;
-    // Soft drop shadow, a bold outline, then the fill: reads over any artwork.
+  let y = titleTop;
+  for (const line of lines) {
+    setFont(line.size);
     ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
-    ctx.shadowBlur = size * 0.12;
-    ctx.shadowOffsetY = size * 0.04;
-    ctx.strokeStyle = outline;
-    ctx.lineWidth = size * (design ? 0.07 : 0.09);
-    ctx.strokeText(line, PAGE_W / 2, y);
+    if (treatment === "shadow" || weakContrast) {
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = line.size * 0.14;
+      ctx.shadowOffsetY = line.size * 0.04;
+    }
+    if (treatment === "outline" || treatment === "hollow" || weakContrast) {
+      ctx.strokeStyle = treatment === "hollow" ? t.fill : t.outline;
+      ctx.lineWidth = line.size * (treatment === "hollow" ? 0.045 : 0.07);
+      ctx.strokeText(line.text, anchorX, y);
+    }
     ctx.restore();
-    ctx.fillStyle = fill;
-    ctx.fillText(line, PAGE_W / 2, y);
-  });
+    if (treatment !== "hollow") {
+      ctx.fillStyle = t.fill;
+      ctx.fillText(line.text, anchorX, y);
+    }
+    y += lineGap(line.size);
+  }
+  ctx.restore();
+  ctx.letterSpacing = "0px";
 
-  if (!script.tagline.trim()) return;
-  if (design) {
-    // An understated tagline, like a film poster: just above the title at the bottom, or at the foot of the page.
-    ctx.font = `700 40px ${fonts.comic}`;
-    const taglineLines = wrapText(ctx, script.tagline.toUpperCase(), PAGE_W - 300);
-    const taglineTop = atBottom ? titleTop - 30 - taglineLines.length * 48 : PAGE_H - 110 - taglineLines.length * 48;
-    ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    taglineLines.forEach((line, i) => ctx.fillText(line, PAGE_W / 2, taglineTop + i * 48));
-    ctx.restore();
+  // A small publisher mark, out of the title's way.
+  const badgeRight = t.position === "top" && t.align !== "right";
+  ctx.font = `30px ${fonts.title}`;
+  ctx.letterSpacing = "2px";
+  const badgeW = ctx.measureText("COMIC.ME").width + 28;
+  const badgeX = badgeRight ? PAGE_W - 48 - badgeW : 48;
+  const badgeY = t.position === "top" ? PAGE_H - 48 - 46 : 48;
+  ctx.fillStyle = "#facc15";
+  ctx.strokeStyle = "#111111";
+  ctx.lineWidth = 3;
+  ctx.fillRect(badgeX, badgeY, badgeW, 46);
+  ctx.strokeRect(badgeX, badgeY, badgeW, 46);
+  ctx.fillStyle = "#111111";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("COMIC.ME", badgeX + badgeW / 2, badgeY + 25);
+  ctx.letterSpacing = "0px";
+
+  if (!taglineText) return;
+  if (!design) {
+    // Covers made before cover designs existed: a caption box near the bottom.
+    const block = textBlock(ctx, taglineText.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
+    const pad = 24;
+    const w = block.width + pad * 2;
+    const h = block.height + pad * 2;
+    const x = (PAGE_W - w) / 2;
+    const boxY = PAGE_H - 160 - h;
+    ctx.fillStyle = style.lettering.captionFill;
+    ctx.strokeStyle = style.lettering.captionInk;
+    ctx.lineWidth = 5;
+    ctx.fillRect(x, boxY, w, h);
+    ctx.strokeRect(x, boxY, w, h);
+    ctx.fillStyle = style.lettering.captionInk;
+    drawTextLines(ctx, block, PAGE_W / 2, boxY + pad, "center");
     return;
   }
 
-  // Tagline box near the bottom (comics made before cover designs existed).
-  const block = textBlock(ctx, script.tagline.toUpperCase(), fonts.comic, 700, 44, PAGE_W - 360);
-  const pad = 24;
-  const w = block.width + pad * 2;
-  const h = block.height + pad * 2;
-  const x = (PAGE_W - w) / 2;
-  const y = PAGE_H - 120 - h;
-  ctx.fillStyle = style.lettering.captionFill;
-  ctx.strokeStyle = style.lettering.captionInk;
-  ctx.lineWidth = 5;
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeRect(x, y, w, h);
-  ctx.fillStyle = style.lettering.captionInk;
-  drawTextLines(ctx, block, PAGE_W / 2, y + pad, "center");
+  // Tagline: understated, like a film poster, always inside the safe area and always readable.
+  ctx.letterSpacing = "4px";
+  const block = textBlock(ctx, taglineText.toUpperCase(), fonts.comic, 700, 38, Math.min(contentW, 1100));
+  const padX = 26;
+  const padY = 14;
+  const tw = block.width + padX * 2;
+  const th = block.height + padY * 2;
+  const tx = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN - tw : (PAGE_W - tw) / 2;
+  // Title at the bottom: tagline just above it. Otherwise: the foot of the page, clear of the publisher mark.
+  const ty = t.position === "bottom" ? Math.max(COVER_MARGIN, titleTop - 36 - th) : PAGE_H - COVER_MARGIN - 70 - th;
+  const light = regionLuminance(ctx, tx, ty, tw, th) > 140;
+  ctx.fillStyle = light ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.6)";
+  ctx.beginPath();
+  ctx.roundRect(tx, ty, tw, th, th / 2);
+  ctx.fill();
+  ctx.fillStyle = light ? "#111111" : "#ffffff";
+  drawTextLines(ctx, block, tx + tw / 2, ty + padY, "center");
+  ctx.letterSpacing = "0px";
+}
+
+/** Splits words into at most `rows` lines of similar length (for stacked titles). */
+function wrapToRows(words: string[], rows: number): string[] {
+  const perRow = Math.ceil(words.length / rows);
+  const result: string[] = [];
+  for (let i = 0; i < words.length; i += perRow) result.push(words.slice(i, i + perRow).join(" "));
+  return result;
 }
 
 // --- Downloads --------------------------------------------------------------------------------
@@ -686,7 +1070,7 @@ export async function renderFullPage(
   } else {
     const page = script.pages[source.index];
     const images = await Promise.all(page.panels.map((_, i) => loadImage(imageUrlFor(`${source.index + 1}-${i + 1}`))));
-    drawPage(ctx, page, source.index + 1, images, style, fonts);
+    drawPage(ctx, page, source.index + 1, images, style, fonts, { speakers: script.characters.map((c) => c.name) });
   }
   return canvas;
 }

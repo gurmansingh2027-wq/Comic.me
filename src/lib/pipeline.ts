@@ -10,7 +10,8 @@ import { loadComic, saveComic, withComicLock } from "./storage";
 import { getStyle } from "./styles";
 
 // Runs the writing steps for a comic in the background and records progress in comic.json,
-// so the comic page can show "Writing…", "Polishing…" and then start drawing.
+// so the Storyboard page can show "Writing…", "Polishing…" and then the storyboard to review.
+// Writing never starts drawing: that only happens after the user approves the storyboard.
 
 const shared = globalThis as typeof globalThis & { comicWriting?: Set<string> };
 const running = (shared.comicWriting ??= new Set());
@@ -36,7 +37,8 @@ export function prepareWriting(id: string): Promise<boolean> {
     if ((comic.status === "draft" && comic.cast === undefined) || (comic.cast !== undefined && !castReady(comic.cast))) {
       throw new UserFacingError("Approve the main and supporting character designs before making your comic.", 409);
     }
-    await saveComic({ ...comic, status: "writing", error: undefined });
+    // From here on the comic belongs to the Storyboard step: nothing is drawn until it's approved.
+    await saveComic({ ...comic, status: "writing", stage: "storyboard", error: undefined });
     return true;
   });
 }
@@ -52,7 +54,7 @@ export async function runWriting(id: string): Promise<void> {
     const style = getStyle(comic.styleId);
     if (!style) throw new Error(`Unknown style ${comic.styleId}`);
 
-    comic = { ...comic, status: "writing", error: undefined };
+    comic = { ...comic, status: "writing", stage: "storyboard", error: undefined };
     await saveComic(comic);
     const direct = await metered(() => writeScript(comic!.story, style, comic!.cast, comic!.preset));
     const draft = direct.result;
@@ -63,7 +65,7 @@ export async function runWriting(id: string): Promise<void> {
     const cast = comic.cast;
     const preset = comic.preset;
     const edit = await metered(() =>
-      polishScript(story, draft).catch((error) => {
+      polishScript(story, draft, style).catch((error) => {
         // The draft is already good enough to draw; don't fail the whole comic over the polish pass.
         console.error("Polish pass failed, keeping the draft:", error);
         return draft;

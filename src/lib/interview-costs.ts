@@ -7,7 +7,8 @@ import type { CostUsage } from "./comic";
 // read-aloud) are collected here under the browser's interview session id, then moved onto the
 // comic's cost log when the story is locked.
 
-const ROOT = path.join(process.cwd(), "storage", "interviews");
+// COMICME_STORAGE_DIR lets tests use a separate folder, so they never touch real comics.
+const ROOT = path.join(process.env.COMICME_STORAGE_DIR || path.join(process.cwd(), "storage"), "interviews");
 const SESSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** More calls than any real interview makes; stops a runaway session file. */
 const MAX_ENTRIES = 300;

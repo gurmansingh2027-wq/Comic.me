@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${fontVariables} h-full antialiased`}>
-      <body className="flex min-h-full flex-col font-sans">
+      <body className="flex min-h-full flex-col overflow-x-clip font-sans">
         <header className="border-b-3 border-ink bg-pop">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
             <Link href="/" className="font-title text-3xl tracking-wide">
