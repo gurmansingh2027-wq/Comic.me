@@ -696,7 +696,7 @@ export async function downloadPagePng(canvas: HTMLCanvasElement, title: string, 
   if (blob) saveBlob(blob, `comic-me-${slugify(title)}-${label}.png`);
 }
 
-/** Builds a print-ready PDF: cover plus every page, each 2:3 portrait. */
+/** Builds the PDF: cover plus every page, each 2:3 portrait (1600×2400 pixels, about 240 dpi). */
 export async function downloadComicPdf(
   script: ComicScript,
   imageUrlFor: (key: string) => string,

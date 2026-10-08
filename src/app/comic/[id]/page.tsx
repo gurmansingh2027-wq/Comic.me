@@ -52,7 +52,10 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
               </li>
             ))}
           </ul>
-          <p className="mt-1 text-xs">Estimates from list prices in src/lib/costs.ts. The voice interview (well under $0.50) isn&apos;t included.</p>
+          <p className="mt-1 text-xs">
+            Priced from the usage each provider reported, at the list prices in src/lib/costs.ts
+            {comic.costLog.some((entry) => entry.usage?.some((usage) => usage.measured === false)) && " (a few items, like read-aloud, are estimates)"}.
+          </p>
         </details>
       )}
     </div>
