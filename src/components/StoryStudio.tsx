@@ -17,7 +17,15 @@ type Composed = {
 
 type Phase = "interview" | "composing" | "review" | "style";
 
-type Saved = { phase: Phase; turns: InterviewTurn[]; composed: Composed | null; styleId: string; presetId?: string };
+type Saved = {
+  phase: Phase;
+  turns: InterviewTurn[];
+  composed: Composed | null;
+  styleId: string;
+  presetId?: string;
+  /** Lets the server add up this interview's AI costs and attach them to the comic. */
+  session?: string;
+};
 
 const STORAGE_KEY = "comicme.studio.v1";
 const FRESH: Saved = {
@@ -53,7 +61,8 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
   // Keep the session across refreshes.
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    const restored: Saved = saved ? { ...FRESH, ...JSON.parse(saved) } : FRESH;
+    const parsed: Saved = saved ? { ...FRESH, ...JSON.parse(saved) } : FRESH;
+    const restored = parsed.session ? parsed : { ...parsed, session: crypto.randomUUID() };
     // Recreate: start from the chosen comic's style; the format travels with the comic as a preset.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring saved progress once on mount
     setState(preset ? { ...restored, styleId: getStyle(preset.styleId)?.id ?? restored.styleId, presetId: preset.sourceId } : restored);
@@ -72,7 +81,7 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
   async function compose(turns: InterviewTurn[]) {
     update({ phase: "composing" });
     try {
-      const composed = await postJson<Composed>("/api/interview/compose", { turns });
+      const composed = await postJson<Composed>("/api/interview/compose", { turns, session: state.session });
       update({ phase: "review", composed });
     } catch (err) {
       setError((err as Error).message);
@@ -85,10 +94,10 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
     update({ turns });
     setBusy("thinking");
     try {
-      const reply = await postJson<{ say: string; done: boolean }>("/api/interview/turn", { turns });
+      const reply = await postJson<{ say: string; done: boolean }>("/api/interview/turn", { turns, session: state.session });
       const next: InterviewTurn[] = [...turns, { role: "ai", text: reply.say }];
       update({ turns: next });
-      if (voiceOn) voice.say(reply.say);
+      if (voiceOn) voice.say(reply.say, state.session);
       if (reply.done) await compose(next);
     } catch (err) {
       setError((err as Error).message);
@@ -118,6 +127,7 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
     try {
       const form = new FormData();
       form.append("audio", audio, audioFileName(audio));
+      if (state.session) form.append("session", state.session);
       const response = await fetch("/api/voice/transcribe", { method: "POST", body: form });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
@@ -150,6 +160,7 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
         styleId: state.styleId,
         intake: { turns: state.turns, characters: state.composed.characters },
         presetId: state.presetId,
+        session: state.session,
       });
       localStorage.removeItem(STORAGE_KEY);
       router.push(`/comic/${id}/characters`);
@@ -161,7 +172,7 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
 
   function startOver() {
     voice.stopSpeaking();
-    setState(FRESH);
+    setState({ ...FRESH, session: crypto.randomUUID() });
     setError(null);
   }
 
@@ -214,7 +225,7 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
                   {turn.role === "ai" && (
                     <button
                       type="button"
-                      onClick={() => voice.say(turn.text)}
+                      onClick={() => voice.say(turn.text, state.session)}
                       aria-label="Play this out loud"
                       className="ml-2 align-middle text-base opacity-60 hover:opacity-100"
                     >

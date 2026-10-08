@@ -29,8 +29,14 @@ for (const comic of rows) {
   const calls = comic.costLog.flatMap((entry: { usage?: unknown[] }) => entry.usage ?? []);
   if (calls.length > 0 && process.argv.includes("--detail")) {
     for (const call of calls) {
-      const size = call.image ? `${call.image.size} ${call.image.quality} +${call.image.references} refs` : `${call.inputTokens} in / ${call.outputTokens} out tokens`;
-      console.log(`         ${formatUsd(call.usd).padStart(6)}  ${call.provider}/${call.model}  ${call.operation}  ${size}${call.retries ? `  (${call.retries} retries)` : ""}`);
+      const tokens = call.inputTokens !== undefined ? ` ${call.inputTokens} in / ${call.outputTokens} out tokens` : "";
+      const size = call.image
+        ? `${call.image.size} ${call.image.quality} +${call.image.references} refs${tokens}`
+        : call.audioSeconds !== undefined
+          ? `${call.audioSeconds}s audio`
+          : tokens.trim();
+      const estimate = call.measured === false ? "  (estimate)" : "";
+      console.log(`         $${call.usd.toFixed(4).padStart(6)}  ${call.provider}/${call.model}  ${call.operation}  ${size}${call.retries ? `  (${call.retries} retries)` : ""}${estimate}`);
     }
   }
 }

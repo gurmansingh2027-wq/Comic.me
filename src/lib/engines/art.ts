@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import OpenAI, { toFile } from "openai";
 import type { ComicScript, Importance, SceneContext } from "../comic";
 import { mentionsCharacter } from "../cast-matching";
-import { imageCost } from "../costs";
+import { imageCost, imageTokenCost } from "../costs";
 import { requireEnv, UserFacingError } from "../errors";
 import { recordUsage } from "../meter";
 import { COVER_SIZE, describeShape, imageSizeForAspect, LAYOUTS, panelAspect } from "../layouts";
@@ -224,10 +224,34 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>, onRetry?: () =
   }
 }
 
-/** Logs one image call for the cost meter. */
-export function recordImageUsage(operation: string, size: string, references: number, retries: number): void {
+/** Logs one image call for the cost meter, priced from the tokens OpenAI reports (or an estimate if it reports none). */
+export function recordImageUsage(
+  operation: string,
+  size: string,
+  references: number,
+  retries: number,
+  reported?: OpenAI.Images.ImagesResponse["usage"],
+): void {
+  const model = IMAGE_MODEL();
   const quality = imageQuality();
-  recordUsage({ provider: "openai", model: IMAGE_MODEL(), operation, image: { size, quality, references }, retries, usd: imageCost(size, quality, references) });
+  const image = { size, quality, references };
+  if (!reported) {
+    recordUsage({ provider: "openai", model, operation, image, retries, usd: imageCost(model, size, quality, references), measured: false });
+    return;
+  }
+  const imageInput = reported.input_tokens_details?.image_tokens ?? 0;
+  const tokens = { textInput: reported.input_tokens - imageInput, imageInput, output: reported.output_tokens };
+  recordUsage({
+    provider: "openai",
+    model,
+    operation,
+    inputTokens: reported.input_tokens,
+    outputTokens: reported.output_tokens,
+    image,
+    retries,
+    usd: imageTokenCost(tokens),
+    measured: true,
+  });
 }
 
 /** Draws one image; with reference pictures it uses OpenAI's edit endpoint so the characters match them. */
@@ -251,7 +275,7 @@ export async function drawImage(job: ArtJob): Promise<Buffer> {
     },
     () => retries++,
   );
-  recordImageUsage(job.references.length ? "image.edit" : "image.generate", job.size, job.references.length, retries);
+  recordImageUsage(job.references.length ? "image.edit" : "image.generate", job.size, job.references.length, retries, result.usage);
 
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) {

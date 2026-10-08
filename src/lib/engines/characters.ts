@@ -219,7 +219,7 @@ export async function drawDesign({
       }),
     () => retries++,
   );
-  recordImageUsage("character-design", DESIGN_SIZE, references.length, retries);
+  recordImageUsage("character-design", DESIGN_SIZE, references.length, retries, result.usage);
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) throw new UserFacingError("The image service didn't return a design. Please try again.", 502);
   return Buffer.from(base64, "base64");

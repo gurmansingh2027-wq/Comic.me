@@ -9,15 +9,15 @@ import { useEffect, useState } from "react";
 export const ESTIMATES = {
   findCast: 15,
   photoCheck: 12,
-  characterDesign: 45,
+  characterDesign: 35,
   approve: 12,
   writeScript: 180,
   /** Editing pass + cover art director. */
   polishScript: 110,
   /** One picture on its own. */
-  picture: 50,
+  picture: 35,
   /** Average time per picture when a whole comic is drawing (several at once, within the rate limit). */
-  picturePerComic: 15,
+  picturePerComic: 12,
 } as const;
 
 export function formatDuration(seconds: number): string {
