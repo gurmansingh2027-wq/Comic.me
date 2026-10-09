@@ -23,6 +23,7 @@ export async function askClaude<S extends z.ZodType>({
   effort,
   maxTokens = 64000,
   operation = "claude",
+  repair,
 }: {
   system: string;
   /** Text, or content blocks (e.g. images followed by text). */
@@ -32,6 +33,8 @@ export async function askClaude<S extends z.ZodType>({
   maxTokens?: number;
   /** What this call is for, for the cost log (e.g. "comic-director"). */
   operation?: string;
+  /** Last resort when the answer doesn't match the schema: fix the raw JSON (e.g. map an unknown enum value). */
+  repair?: (raw: unknown) => unknown;
 }): Promise<z.infer<S>> {
   const budgeted = auditBudgetActive();
   const client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY"), ...(budgeted ? { maxRetries: 0 } : {}), timeout: 180_000 });
@@ -42,7 +45,8 @@ export async function askClaude<S extends z.ZodType>({
     max_tokens: maxTokens,
     // If Claude's safety filters decline, the API retries on a fallback model automatically.
     ...(budgeted ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
-    output_config: { effort, format: betaZodOutputFormat(schema) },
+    // The schema is enforced by Claude; we parse the answer ourselves so a mismatch can be logged and repaired.
+    output_config: { effort, format: { type: "json_schema", schema: betaZodOutputFormat(schema).schema } },
     system,
     messages: [{ role: "user", content: user }],
   });
@@ -63,8 +67,17 @@ export async function askClaude<S extends z.ZodType>({
   if (response.stop_reason === "refusal") {
     throw new UserFacingError("Our AI couldn't help with this story. Try rewording it or leaving out sensitive details.");
   }
-  if (response.stop_reason === "max_tokens" || !response.parsed_output) {
+  const text = response.content.filter((block) => block.type === "text").map((block) => block.text).join("");
+  if (response.stop_reason === "max_tokens" || !text.trim()) {
     throw new UserFacingError("The AI's answer came back incomplete. Please try again.", 502);
   }
-  return response.parsed_output as z.infer<S>;
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new UserFacingError("The AI's answer wasn't valid JSON. Please try again.", 502); }
+  let parsed = schema.safeParse(raw);
+  if (!parsed.success && repair) parsed = schema.safeParse(repair(raw));
+  if (!parsed.success) {
+    console.error(`${operation}: answer from ${response.model} didn't match the schema: ${parsed.error.message.slice(0, 600)}\nRaw: ${text.slice(0, 1500)}`);
+    throw new UserFacingError("The AI's answer didn't match the expected format. Please try again.", 502);
+  }
+  return parsed.data as z.infer<S>;
 }

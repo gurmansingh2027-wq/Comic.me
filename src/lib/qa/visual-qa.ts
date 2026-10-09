@@ -122,7 +122,24 @@ export async function checkPanel({
       : []),
     { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}\n\nCheck image 1.` },
   ];
-  return askClaude({ system: QA_PROMPT, user: blocks, schema: PanelVerdictSchema, effort, operation: `visual-qa-${effort}`, maxTokens: 4000 });
+  return askClaude({ system: QA_PROMPT, user: blocks, schema: PanelVerdictSchema, effort, operation: `visual-qa-${effort}`, maxTokens: 4000, repair: repairFailureClasses });
+}
+
+/**
+ * The inspector occasionally names a failure class that isn't in our list. Keep its description
+ * as a soft finding rather than failing the whole inspection; a failed beat check still blocks.
+ */
+export function repairFailureClasses(raw: unknown): unknown {
+  const verdict = raw as { failures?: { failure?: string }[]; findings?: { failure?: string }[] };
+  for (const list of [verdict?.failures, verdict?.findings]) {
+    for (const finding of list ?? []) {
+      if (finding && typeof finding.failure === "string" && !(FAILURE_CLASS_IDS as string[]).includes(finding.failure)) {
+        console.warn(`visual QA: unknown failure class "${finding.failure}" recorded as UNPLANNED_ELEMENT`);
+        finding.failure = "UNPLANNED_ELEMENT";
+      }
+    }
+  }
+  return raw;
 }
 
 export type Decision = "accept" | "retry" | "simplify" | "escalate" | "flag";
@@ -200,7 +217,7 @@ export async function checkSequence({
     ).flat(),
     { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}` },
   ];
-  return askClaude({ system: SEQUENCE_PROMPT, user: blocks, schema: SequenceSchema, effort, operation: `sequence-qa-${effort}`, maxTokens: 4000 });
+  return askClaude({ system: SEQUENCE_PROMPT, user: blocks, schema: SequenceSchema, effort, operation: `sequence-qa-${effort}`, maxTokens: 4000, repair: repairFailureClasses });
 }
 
 /** A labelled contact sheet of pictures (for the whole-comic pass): one image instead of forty. */
