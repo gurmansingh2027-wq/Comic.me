@@ -49,6 +49,11 @@ export type CastRef = {
 };
 
 /** An Object Bible entry with its approved canon sheet (if any), for prompts and references. */
+/** "Right" alone is ambiguous (viewer's or car's right?), so spell it out from each viewpoint. */
+export function driverSideNote(side: "left" | "right"): string {
+  const other = side === "right" ? "left" : "right";
+  return `${side === "right" ? "Right" : "Left"}-hand drive: the steering wheel and the driver are on the car's OWN ${side} side. Seen from behind the car the driver is on the ${side} of the cabin; seen from the front, on the ${other}. Never mirror this.`;
+}
 export type ObjectRef = Pick<CanonObject, "id" | "name" | "kind" | "role" | "owner" | "description" | "locks" | "driverSide" | "states"> & { designPath?: string };
 
 export type ArtJob = {
@@ -101,7 +106,7 @@ function objectNotes(entries: LedgerObject[], objectRefs: ObjectRef[], refs: Ref
       object.locks.length > 0 && `  LOCKED, must be correct even if small or far away: ${object.locks.join("; ")}.`,
       state ? `  State in this panel: ${state.label}: ${state.description}.` : "  State: exactly as designed (no damage, no changed decals).",
       entry.position && `  Position: ${entry.position}.`,
-      object.kind === "vehicle" && object.driverSide && `  Steering wheel and driver on the ${object.driverSide} side.`,
+      object.kind === "vehicle" && object.driverSide && `  ${driverSideNote(object.driverSide)}`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -130,7 +135,7 @@ function peopleNotes(script: ComicScript, context: SceneContext | undefined, peo
     const vehicle = person.inside ? objectRefs.find((object) => object.id === person.inside!.objectId) : undefined;
     const placement =
       person.inside &&
-      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
+      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel. Even if the scene has them lean out of the window, their chest and shoulders face the way the car's nose points; only the head turns. Never sit them backwards, facing the car's rear" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
     const doing = `Feeling: ${raw?.emotion || "as the scene suggests"}. Doing: ${raw?.action || "as described"}.`;
     if (n) {
       return [`- ${who}: reference image ${n} is their character design${stage ? " at this age" : ""}. Copy who they are exactly (face, features, skin tone, hair, build, distinctive markers such as a turban, glasses or beard). ${outfit} ${doing}`, placement && `  ${placement}`]

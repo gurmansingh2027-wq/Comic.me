@@ -26,7 +26,7 @@ export const FAILURE_CLASSES = {
   WRONG_SCREEN_DIRECTION: { severity: "hard", label: "Travel direction contradicts the planned/established direction (e.g. two cars at one signal facing opposite ways)" },
   ACTION_CONTINUITY_FAILURE: { severity: "hard", label: "Who is ahead/behind/beside contradicts the storyboard or the previous panel" },
   ACTION_GEOGRAPHY_FAILURE: { severity: "hard", label: "The spatial layout of the action is unreadable or contradicts the sequence plan" },
-  DRIVER_SIDE_INCONSISTENCY: { severity: "soft", label: "The driver sits on the other side of the car from the established driver side" },
+  DRIVER_SIDE_INCONSISTENCY: { severity: "hard", label: "The driver sits on the other side of the car from its locked driver side (a mirrored car reads as wrong to readers)" },
   UNPLANNED_ELEMENT: { severity: "soft", label: "An extra vehicle, person or prop that the storyboard doesn't have" },
   // Readability and style
   SCENE_MISMATCH: { severity: "hard", label: "The picture doesn't show the storyboard beat" },

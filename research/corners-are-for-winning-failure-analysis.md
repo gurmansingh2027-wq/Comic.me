@@ -1,7 +1,8 @@
 # "Corners Are for Winning": failure analysis (system learning)
 
 > Comic `ea55da3f…`, Bold Graphic style, 12 pages + cover, 41 pictures, $2.67. Made 9 Oct 2026 on the pipeline before continuity QA existed.
-> **Purpose:** teach the product what not to do. We do **not** fix or regenerate this comic.
+> **Purpose:** teach the product what not to do. The labels below describe the original pictures.
+> **Update (9 Oct 2026):** the comic was later upgraded in place with the Object Bible (canon sheets for the Huracan, GT-R and PCR van), panel occupancy and screen direction, and run through the full QA pipeline: existing pictures were inspected first and only failures redrawn (about $16). A backup of the original is in `.context/backups/` on the machine that made it. Readers then caught what QA missed: drivers sitting on the wrong (left) side and the Stranger leaning out with his chest facing the car's rear, which led to the driver-side and facing rules.
 > Each finding is tagged with a reusable failure class from `src/lib/qa/failure-classes.ts`. The same labels are machine-readable in `research/fixtures/corners-failures.json`, which the QA evaluation script uses.
 
 ## Canon the story defined (what the system should have locked)

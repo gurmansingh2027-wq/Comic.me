@@ -5,6 +5,7 @@ import { askClaude, imageBlock } from "../claude";
 import type { CanonObject, Complexity, ComicScript, Panel } from "../comic";
 import type { LedgerEntry } from "../continuity";
 import type { ComicStyle } from "../styles";
+import { driverSideNote } from "../engines/art";
 import { FAILURE_CLASS_IDS, FAILURE_CLASSES, failureGuide, isHard, type FailureClass } from "./failure-classes";
 
 // Visual QA: a multimodal inspector that looks at a generated picture BEFORE it's accepted,
@@ -60,6 +61,7 @@ Compare the generated picture against the storyboard intent, the Continuity Ledg
 - Hard: wrong or replaced character; missing identity-critical markers (turban, glasses, beard…); wrong age; wrong person in a vehicle; a person twice; a canon vehicle/object with the wrong base colour, model, body kit or a missing/changed locked livery where it should be visible; duplicated vehicles; people clipping through vehicles or sitting outside them when they should be inside; impossible poses or anatomy; vehicles off the road or roads that can't exist; travel direction or who-is-ahead contradicting the ledger; the picture not showing the storyboard beat.
 - Soft (note, don't fail): small background differences, lighting variation, unimportant passers-by, texture changes, tiny details you can't make out. Camera framing may vary if the same action and story beat remain clear. A wider view of the same action is NOT SCENE_MISMATCH; reserve that hard class for a different or missing narrative event. Simplified compositions intentionally change framing.
 - Night lighting may darken a colour but must not change its hue: a white car can look blue-grey in shadow, never yellow, orange, green or black under even light.
+- People in vehicles: a driver's chest and shoulders face the way the vehicle points, even when leaning out of a window (only the head may turn). A torso facing the vehicle's rear is IMPOSSIBLE_POSE; a driver on the wrong side of a vehicle with a locked driver side is DRIVER_SIDE_INCONSISTENCY. Work out which way the car points from its lights (headlights at the front, tail lights at the rear) before judging.
 - Only judge what is visible. Don't fail a livery that's on the side we can't see; do fail one that should be visible and isn't.
 - Confidence is about your verdict on what is VISIBLE. If you examined everything visible and found nothing wrong, that is high confidence: never lower it because something is hidden, off-frame, stylised or small. Use medium when a required detail is genuinely ambiguous at this size, and low only when the image is too unclear to judge at all.
 - Only report a failure you can point at. An extra person or prop the storyboard doesn't list is UNPLANNED_ELEMENT (soft) unless it is a named character who shouldn't be there twice or at all.
@@ -88,7 +90,7 @@ export function panelFacts(panel: Panel, entry: LedgerEntry | undefined, objects
       ? `Canon objects: ${entry.objects
           .map((o) => {
             const canon = objects.find((c) => c.id === o.id);
-            return `${canon?.name ?? o.id}: ${canon?.description ?? ""} [locks: ${(canon?.locks ?? []).join("; ")}]${o.state ? ` state: ${o.state} (${canon?.states?.find(state => state.id === o.state)?.description ?? "as designed"})` : ""}${canon?.driverSide ? ` driver on the ${canon.driverSide}` : ""}`;
+            return `${canon?.name ?? o.id}: ${canon?.description ?? ""} [locks: ${(canon?.locks ?? []).join("; ")}]${o.state ? ` state: ${o.state} (${canon?.states?.find(state => state.id === o.state)?.description ?? "as designed"})` : ""}${canon?.driverSide ? ` ${driverSideNote(canon.driverSide)}` : ""}`;
           })
           .join(" | ")}`
       : "",
