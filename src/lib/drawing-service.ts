@@ -6,6 +6,7 @@ import { coverJob, coverObjects, drawImage, panelJob } from "./engines/art";
 import { UserFacingError } from "./errors";
 import { metered } from "./meter";
 import { castRefsFor, ledgerFor, objectRefsFor, qaReferences } from "./picture-context";
+import { vehicleSpeed } from "./vehicle-physics";
 import type { LedgerEntry } from "./continuity";
 import { digest, invalidateComposition, pictureRevision } from "./qa/state";
 import { checkPanel, decide, maxAttempts, panelFacts } from "./qa/visual-qa";
@@ -52,7 +53,10 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
       objects: coverObjects(coverScene, objectRefs),
       people: (comic.cast ?? []).filter(member => member.importance === "main" || coverScene.toLowerCase().includes(member.name.toLowerCase())).map(member => {
         const first = entries.flatMap(entry => entry.people).find(person => person.name === member.name);
-        return first ? { ...first, inside: undefined } : { name: member.name, stage: "", wardrobe: "clothes matching the cover", wardrobeFromSheet: member.lookPolicy === "keep" || member.lookPolicy === "ask" };
+        // A car that's moving on the cover is driven by its owner (cars don't drive themselves).
+        const owned = coverObjects(coverScene, objectRefs).map(item => objectRefs.find(ref => ref.id === item.id)).find(ref => ref?.kind === "vehicle" && ref.owner === member.name);
+        const inside = owned && !["parked", "stopped"].includes(vehicleSpeed({ shot: "wide", scene: coverScene, caption: "", dialogue: [] }, undefined)) ? { objectId: owned.id, position: "driver's seat" } : undefined;
+        return first ? { ...first, inside } : { name: member.name, stage: "", wardrobe: "clothes matching the cover", wardrobeFromSheet: member.lookPolicy === "keep" || member.lookPolicy === "ask", inside };
       }),
     } : entries.find(entry => entry.key === key);
     const [p, i] = key.split("-").map(Number).map(n => n - 1);
@@ -72,7 +76,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
     const previous = entry?.continuesFrom ? await deps.loadImage(id, entry.continuesFrom) : null;
     const previousPath = previous && entry?.continuesFrom ? imagePath(id, entry.continuesFrom) : undefined;
     const neighbours = panel ? `\nNext intent: ${entries[entries.findIndex(e => e.key === key) + 1] ? script.pages[entries[entries.findIndex(e => e.key === key) + 1].pageIndex].panels[entries[entries.findIndex(e => e.key === key) + 1].panelIndex].scene : "End of comic"}` : "";
-    const facts = panel ? panelFacts(panel, entry, comic.objects ?? []) + neighbours : `Cover intent: ${coverScene}\nTitle: ${script.title}\n${panelFacts({ shot: "wide", scene: coverScene, caption: "", dialogue: [] }, entry, comic.objects ?? [])}`;
+    const facts = panel ? panelFacts(panel, entry, comic.objects ?? [], entries) + neighbours : `Cover intent: ${coverScene}\nTitle: ${script.title}\n${panelFacts({ shot: "wide", scene: coverScene, caption: "", dialogue: [] }, entry, comic.objects ?? [])}`;
     const existing = await deps.loadImage(id, key);
     let done = false;
     comic = await update(id, async latest => {
@@ -126,7 +130,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
           ].filter(Boolean).join(" ");
           const retry = fix ? { fix, safe: simplified } : undefined;
           const revisionInput = options.redraw && existing && !fresh ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
-          const job = key === "cover" ? coverJob(script, style, castRefs, revisionInput, objectRefs, retry, entry) : panelJob(script, p, i, style, castRefs, revisionInput, { objectRefs, entry, previousPanelPath: previousPath, retry });
+          const job = key === "cover" ? coverJob(script, style, castRefs, revisionInput, objectRefs, retry, entry) : panelJob(script, p, i, style, castRefs, revisionInput, { objectRefs, entry, entries, previousPanelPath: previousPath, retry });
           candidate = await billed(id, options.redraw || attempt > 1 || options.repair ? "redraw" : "picture", `${key} attempt ${attempt}${simplified ? " safe composition" : ""}`, () => deps.drawImage(job));
           const file = `${randomUUID()}.webp`;
           await deps.saveQaFile(id, file, candidate);
@@ -134,12 +138,14 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
         }
         record = comic.qa!.pictures[key];
         let escalated = !!record.escalated;
-        let verdict = await billed(id, "qa", `${key} ${escalated ? "high" : "low"}`, () => deps.checkPanel({ image: candidate!, facts, style, references, previous: previous ?? undefined, effort: escalated ? "high" : "low" }));
+        // The reader's requested change (a redraw) is part of the brief the picture is judged against.
+        const brief = options.redraw && options.feedback ? `${facts}\nThe reader asked for this change, which overrides the storyboard beat wherever they differ: ${options.feedback}` : facts;
+        let verdict = await billed(id, "qa", `${key} ${escalated ? "high" : "low"}`, () => deps.checkPanel({ image: candidate!, facts: brief, style, references, previous: previous ?? undefined, effort: escalated ? "high" : "low" }));
         let decision = decide({ verdict, attempt: record.attempts, complexity, hasSafeShot: true, escalated });
         if (decision === "escalate") {
           escalated = true;
           await writeRecord({ escalated });
-          verdict = await billed(id, "qa", `${key} high`, () => deps.checkPanel({ image: candidate!, facts, style, references, previous: previous ?? undefined, effort: "high" }));
+          verdict = await billed(id, "qa", `${key} high`, () => deps.checkPanel({ image: candidate!, facts: brief, style, references, previous: previous ?? undefined, effort: "high" }));
           decision = decide({ verdict, attempt: record.attempts, complexity, hasSafeShot: true, escalated });
         }
         const findings = verdict.failures.map(finding => ({ ...finding, key, fix: verdict.fix }));

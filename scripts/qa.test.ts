@@ -156,3 +156,11 @@ test("comics checked under the whole-book revision keep their checks after migra
   migrateQaRevisions(comic);
   assert.equal(comic.qa!.revisions, 2); assert.equal(comic.qa!.pictures["1-1"].accepted!.revision, pictureRevision(comic, "1-1"));
 });
+test("the reader's requested change is part of what the inspector checks a redraw against", async () => {
+  const h = harness([pass, pass]); await h.service.draw(h.comic.id, "1-1");
+  const facts: string[] = []; const check = h.deps.checkPanel;
+  h.deps.checkPanel = async (input: { facts: string }) => { facts.push(input.facts); return check(); };
+  const accepted = h.comic.qa!.pictures["1-1"].accepted!;
+  await createDrawingService(h.deps).draw(h.comic.id, "1-1", { redraw: true, fresh: true, requestId: "r", expectedDigest: accepted.digest, feedback: "no waving, hands on the wheel" });
+  assert.match(facts[0], /overrides the storyboard beat.*no waving/);
+});

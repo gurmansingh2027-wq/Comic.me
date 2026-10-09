@@ -168,3 +168,19 @@ test("only explicitly established occupants inherit into an ongoing sequence", (
   assert.equal(result.entries[1].people[0].name, "The Stranger");
   assert.equal(result.entries[1].people[0].inferred, true);
 });
+test("physics: a driver leaning out of a racing car is flagged and drawn inside; a stopped car allows it", async () => {
+  const { physicsConflicts, physicsNotes, vehicleSpeed } = await import("../src/lib/vehicle-physics");
+  const objects = [{ id: "car", name: "the car", kind: "vehicle" as const, role: "hero" as const, description: "", locks: [], designAttempts: 0, driverSide: "right" as const }];
+  const panel = (scene: string): Panel => ({ shot: "medium", scene, caption: "", dialogue: [], context: { location: "Ring Road", period: "now", timeOfDay: "night", weather: "", event: "race", cast: [{ name: "Ravi", stage: "", wardrobe: "", emotion: "", action: "hanging out of the window, waving", inside: { objectId: "car", position: "driver's seat" } }], objects: [], canon: [{ id: "car" }], continuity: "", sequence: "race", motion: { direction: "left-to-right" } } });
+  const racing = panel("Ravi racing flat out down the Ring Road");
+  const ledger = buildLedger({ title: "", tagline: "", bible: null, characters: [], cover: null, pages: [{ layout: "full", panels: [racing] }] } as never, [], objects);
+  const entry = ledger.entries[0];
+  assert.equal(vehicleSpeed(racing, entry), "fast");
+  assert.equal(physicsConflicts(racing, entry).length, 1);
+  assert.ok(ledger.issues.some(issue => issue.failure === "IMPOSSIBLE_POSE" && issue.fixed));
+  const notes = String(physicsNotes(racing, entry, ledger.entries, objects));
+  assert.match(notes, /pointing screen-RIGHT/); assert.match(notes, /both hands on the wheel/); assert.match(notes, /trail BEHIND the vehicles \(toward screen-left\)/); assert.match(notes, /inside the cabin instead/);
+  const stopped = panel("Ravi idles at the red light");
+  const stoppedEntry = buildLedger({ title: "", tagline: "", bible: null, characters: [], cover: null, pages: [{ layout: "full", panels: [stopped] }] } as never, [], objects).entries[0];
+  assert.equal(vehicleSpeed(stopped, stoppedEntry), "stopped"); assert.equal(physicsConflicts(stopped, stoppedEntry).length, 0);
+});

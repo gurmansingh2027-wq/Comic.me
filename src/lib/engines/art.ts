@@ -1,8 +1,9 @@
 import "server-only";
 import { createReadStream } from "node:fs";
 import OpenAI, { toFile } from "openai";
-import { identityOnly, type CanonObject, type ComicScript, type CoverDesign, type Importance, type Motion, type SceneContext } from "../comic";
+import { identityOnly, type CanonObject, type ComicScript, type CoverDesign, type Importance, type Motion, type Panel, type SceneContext } from "../comic";
 import type { LedgerEntry, LedgerObject, LedgerPerson } from "../continuity";
+import { physicsNotes } from "../vehicle-physics";
 import { mentionsCharacter } from "../cast-matching";
 import { imageCost, imageTokenCost } from "../costs";
 import { requireEnv, UserFacingError } from "../errors";
@@ -135,7 +136,7 @@ function peopleNotes(script: ComicScript, context: SceneContext | undefined, peo
     const vehicle = person.inside ? objectRefs.find((object) => object.id === person.inside!.objectId) : undefined;
     const placement =
       person.inside &&
-      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel. Leaning out of a window means seated, window down, head, shoulder and forearm through the open side window; never sitting on the sill or rising above the roof. Their chest and shoulders face the way the car's nose points; only the head turns. Never sit them backwards, facing the car's rear, or turned round to look out of the rear window" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
+      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}), seated in the cabin, never through the door, roof or glass; their exact pose is in SCENE STATE below.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
     const doing = `Feeling: ${raw?.emotion || "as the scene suggests"}. Doing: ${raw?.action || "as described"}.`;
     if (n) {
       return [`- ${who}: reference image ${n} is their character design${stage ? " at this age" : ""}. Copy who they are exactly (face, features, skin tone, hair, build, distinctive markers such as a turban, glasses or beard). ${outfit} ${doing}`, placement && `  ${placement}`]
@@ -218,6 +219,7 @@ export function coverJob(
   entry?: LedgerEntry,
 ): ArtJob {
   const scene = script.cover?.scene ?? script.pages[0].panels[0].scene;
+  const coverPanel: Panel = { shot: "wide", scene, caption: "", dialogue: [] };
   const design = script.cover?.design;
   const refs = new References();
   if (revision) refs.add(revision.currentPath);
@@ -239,6 +241,7 @@ export function coverJob(
     objects,
     objects && "The cover palette applies to the background and lighting, NEVER to the canon objects' own colours.",
     cast,
+    entry && physicsNotes(coverPanel, { ...entry, objects: coverObjects(scene, objectRefs) }, [], objectRefs),
     "Craft: one clear idea readable at thumbnail size; a strong silhouette; deliberate negative space; a limited palette with one accent colour; finished, confident rendering where it matters and restraint everywhere else.",
     titleSpace(design),
     NO_TEXT,
@@ -261,9 +264,9 @@ export function panelJob(
   style: ComicStyle,
   castRefs: CastRef[] = [],
   revision?: Revision,
-  options: { objectRefs?: ObjectRef[]; entry?: LedgerEntry; previousPanelPath?: string; retry?: QaRetry } = {},
+  options: { objectRefs?: ObjectRef[]; entry?: LedgerEntry; entries?: LedgerEntry[]; previousPanelPath?: string; retry?: QaRetry } = {},
 ): ArtJob {
-  const { objectRefs = [], entry, previousPanelPath, retry } = options;
+  const { objectRefs = [], entry, entries = [], previousPanelPath, retry } = options;
   const page = script.pages[pageIndex];
   const panel = page.panels[panelIndex];
   const rect = LAYOUTS[page.layout].panels[panelIndex];
@@ -310,6 +313,7 @@ export function panelJob(
     objects,
     people,
     motionNotes(entry?.motion, hasVehicles),
+    physicsNotes(panel, entry, entries, objectRefs),
     hasVehicles &&
       "Physics: vehicles sit on the road with all wheels on the ground (unless the scene says otherwise), roads, lanes and junctions are physically plausible, and the only vehicles are the ones named here plus clearly secondary background traffic. No duplicate of any named vehicle or person.",
     previousN && `Reference image ${previousN} is the previous panel of this same scene: keep the setting, lighting, colours, vehicles and everyone's clothes consistent with it, and keep fixed scenery (traffic lights, poles, kerbs, buildings) on the same side of the road, but draw the NEW moment and camera described here (don't copy its composition).`,
