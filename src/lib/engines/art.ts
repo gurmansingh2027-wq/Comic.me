@@ -135,7 +135,7 @@ function peopleNotes(script: ComicScript, context: SceneContext | undefined, peo
     const vehicle = person.inside ? objectRefs.find((object) => object.id === person.inside!.objectId) : undefined;
     const placement =
       person.inside &&
-      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel. Even if the scene has them lean out of the window, their chest and shoulders face the way the car's nose points; only the head turns. Never sit them backwards, facing the car's rear" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
+      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel. Leaning out of a window means seated, window down, head, shoulder and forearm through the open side window; never sitting on the sill or rising above the roof. Their chest and shoulders face the way the car's nose points; only the head turns. Never sit them backwards, facing the car's rear, or turned round to look out of the rear window" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
     const doing = `Feeling: ${raw?.emotion || "as the scene suggests"}. Doing: ${raw?.action || "as described"}.`;
     if (n) {
       return [`- ${who}: reference image ${n} is their character design${stage ? " at this age" : ""}. Copy who they are exactly (face, features, skin tone, hair, build, distinctive markers such as a turban, glasses or beard). ${outfit} ${doing}`, placement && `  ${placement}`]
@@ -275,7 +275,8 @@ export function panelJob(
   const people = entry && panel.context
     ? peopleNotes(script, panel.context, entry.people, castRefs, objectRefs, refs)
     : legacyCast(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs, refs);
-  const previousN = previousPanelPath && !revision ? refs.add(previousPanelPath) : null;
+  // Redraws need it too: without it a redraw loses the scene's fixed geography (which side the signal is on).
+  const previousN = previousPanelPath ? refs.add(previousPanelPath) : null;
   const hasVehicles = !!entry?.objects.some((object) => objectRefs.find((ref) => ref.id === object.id)?.kind === "vehicle");
 
   const placements = [...new Map(panel.dialogue.map((line) => [line.speaker, line.side])).entries()].map(
@@ -311,7 +312,7 @@ export function panelJob(
     motionNotes(entry?.motion, hasVehicles),
     hasVehicles &&
       "Physics: vehicles sit on the road with all wheels on the ground (unless the scene says otherwise), roads, lanes and junctions are physically plausible, and the only vehicles are the ones named here plus clearly secondary background traffic. No duplicate of any named vehicle or person.",
-    previousN && `Reference image ${previousN} is the previous panel of this same scene: keep the setting, lighting, colours, vehicles and everyone's clothes consistent with it, but draw the NEW moment and camera described here (don't copy its composition).`,
+    previousN && `Reference image ${previousN} is the previous panel of this same scene: keep the setting, lighting, colours, vehicles and everyone's clothes consistent with it, and keep fixed scenery (traffic lights, poles, kerbs, buildings) on the same side of the road, but draw the NEW moment and camera described here (don't copy its composition).`,
     placements.length > 0 && `Composition: ${placements.join(" ")}`,
     neighbours.length > 0 && `Story flow (for continuity only, don't draw these): ${neighbours.join(" ")}`,
     hasLettering &&

@@ -13,7 +13,8 @@ import { imagePath, loadComic, loadImage, loadQaFile, saveComic, saveImage, save
 import { getStyle } from "./styles";
 
 const defaults = { loadComic, loadImage, loadQaFile, saveComic, saveImage, saveQaFile, withComicLock, drawImage, checkPanel, qaReferences };
-type Options = { restart?: boolean; redraw?: boolean; requestId?: string; expectedDigest?: string; feedback?: string; repair?: string };
+/** `fresh`: redraw from the storyboard and the requested change instead of editing the current picture (edits keep its composition). */
+type Options = { restart?: boolean; redraw?: boolean; fresh?: boolean; requestId?: string; expectedDigest?: string; feedback?: string; repair?: string };
 const shared = globalThis as typeof globalThis & { pictureFlights?: Map<string, Promise<void>> };
 
 export function createDrawingService(overrides: Partial<typeof defaults> = {}, flights = new Map<string, Promise<void>>()) {
@@ -117,8 +118,13 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
           const attempt = record.attempts + 1;
           const simplified = attempt === limit;
           await writeRecord({ attempts: attempt, status: "generating", simplified, escalated: false });
-          const retry = attempt > 1 || options.repair || record.findings.length ? { fix: record.notes || options.repair || "Preserve all canon details and the story beat.", safe: simplified } : undefined;
-          const revisionInput = options.redraw && existing ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
+          const fresh = !!options.redraw && !!options.fresh;
+          const fix = [
+            fresh && options.feedback ? `The reader asked for this change: ${options.feedback}` : "",
+            attempt > 1 || options.repair || record.findings.length ? record.notes || options.repair || "Preserve all canon details and the story beat." : "",
+          ].filter(Boolean).join(" ");
+          const retry = fix ? { fix, safe: simplified } : undefined;
+          const revisionInput = options.redraw && existing && !fresh ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
           const job = key === "cover" ? coverJob(script, style, castRefs, revisionInput, objectRefs, retry, entry) : panelJob(script, p, i, style, castRefs, revisionInput, { objectRefs, entry, previousPanelPath: previousPath, retry });
           candidate = await billed(id, options.redraw || attempt > 1 || options.repair ? "redraw" : "picture", `${key} attempt ${attempt}${simplified ? " safe composition" : ""}`, () => deps.drawImage(job));
           const file = `${randomUUID()}.webp`;

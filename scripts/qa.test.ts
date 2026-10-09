@@ -133,3 +133,9 @@ test("an unknown label from the inspector falls back safely instead of failing t
   const verdict = PanelVerdictSchema.parse({ checks: [{ dimension: "VEHICLE_LIVERY", status: "fail", note: "" }], failures: [{ failure: "WRONG_CAR_COLOUR", what: "orange" }], confidence: "very high", fix: "paint it white" });
   assert.equal(verdict.checks[0].dimension, "STYLE"); assert.equal(verdict.failures[0].failure, "SCENE_MISMATCH"); assert.equal(verdict.confidence, "medium");
 });
+test("a fresh redraw draws from the storyboard with the requested change instead of editing the picture", async () => {
+  const h = harness([pass, pass]); await h.service.draw(h.comic.id, "1-1");
+  const accepted = h.comic.qa!.pictures["1-1"].accepted!;
+  await h.service.draw(h.comic.id, "1-1", { redraw: true, fresh: true, requestId: "fresh-1", expectedDigest: accepted.digest, feedback: "camera inside the car" });
+  assert.equal(h.prompts.length, 2); assert.match(h.prompts[1], /camera inside the car/); assert.doesNotMatch(h.prompts[1], /Requested change \(apply it clearly\)/);
+});
