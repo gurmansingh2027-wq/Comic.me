@@ -192,6 +192,8 @@ export type ComicScript = {
   title: string;
   /** Other titles the editor suggested, offered when the user confirms the title. */
   titleOptions?: string[];
+  /** Reader's choice on the finished comic: letter the cover without its title (lettering only, never redraws). */
+  coverTitleHidden?: boolean;
   tagline: string;
   bible: StoryBible | null;
   characters: Character[];

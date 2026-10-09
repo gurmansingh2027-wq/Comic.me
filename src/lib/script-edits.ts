@@ -146,6 +146,7 @@ export async function approveStoryboard(id: string): Promise<void> {
 }
 
 const LetteringEdit = z.object({
+  coverTitleHidden: z.boolean().optional(),
   pages: z.array(z.object({ panels: z.array(PanelSchema.pick({ caption: true, captionPos: true, dialogue: true, sfx: true, sfxPos: true })) })),
 });
 
@@ -166,6 +167,7 @@ export async function saveLettering(id: string, input: unknown): Promise<ComicSc
     }
     const script: ComicScript = {
       ...comic.script,
+      coverTitleHidden: parsed.data.coverTitleHidden ?? comic.script.coverTitleHidden,
       pages: pages.map((page, p) => ({
         ...page,
         panels: page.panels.map((panel, i) => ({ ...panel, ...edits[p].panels[i] })),

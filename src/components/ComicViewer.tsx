@@ -182,7 +182,7 @@ function ComicDrawing({
   // Save text and balloon edits a moment after each real change. Lettering is drawn by our code,
   // so these edits are free: the artwork underneath is never redrawn.
   useEffect(() => {
-    const body = JSON.stringify({ pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue, sfx, sfxPos }) => ({ caption, captionPos, dialogue, sfx, sfxPos })) })) });
+    const body = JSON.stringify({ coverTitleHidden: !!script.coverTitleHidden, pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue, sfx, sfxPos }) => ({ caption, captionPos, dialogue, sfx, sfxPos })) })) });
     if (lastSaved.current === null) lastSaved.current = body;
     if (body === lastSaved.current) return;
     setQa(current => ({ ...current, ready: false }));
@@ -296,6 +296,8 @@ function ComicDrawing({
       onRetry: retry,
       onSave: () => savePage(which),
       onRedraw: which === "cover" ? (feedback: string) => redraw("cover", feedback) : undefined,
+      titleHidden: which === "cover" ? !!script.coverTitleHidden : undefined,
+      onToggleTitle: which === "cover" ? () => setScript((current) => ({ ...current, coverTitleHidden: !current.coverTitleHidden })) : undefined,
     };
   };
 
