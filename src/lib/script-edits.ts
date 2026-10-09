@@ -1,6 +1,9 @@
 import "server-only";
 import { z } from "zod";
-import { BALLOON_KINDS, MAX_PAGES, MAX_PANELS, maxHeroPanels, type ComicScript } from "./comic";
+import { BALLOON_KINDS, COMPLEXITIES, MAX_PAGES, MAX_PANELS, maxHeroPanels, type ComicScript } from "./comic";
+import { buildLedger } from "./continuity";
+import { missingApprovals } from "./comic";
+import { invalidateComposition } from "./qa/state";
 import { UserFacingError } from "./errors";
 import { fitLayout, LAYOUT_IDS } from "./layouts";
 import { loadComic, saveComic, withComicLock } from "./storage";
@@ -29,9 +32,28 @@ const ContextSchema = z.object({
   camera: short.optional(),
   relationships: short.optional(),
   cast: z
-    .array(z.object({ name: z.string().max(100), stage: z.string().max(40), wardrobe: short, emotion: short, action: short }))
+    .array(
+      z.object({
+        name: z.string().max(100),
+        stage: z.string().max(40),
+        wardrobe: short,
+        emotion: short,
+        action: short,
+        inside: z.object({ objectId: z.string().max(40), position: short }).optional(),
+        lookChange: short.optional(),
+        lookChangeApproved: z.boolean().optional(),
+        lookChangeReviewed: z.boolean().optional(),
+      }),
+    )
     .max(8),
   objects: z.array(short).max(10),
+  canon: z.array(z.object({ id: z.string().max(40), state: short.optional(), position: short.optional() })).max(6).optional(),
+  sequence: z.string().max(60).optional(),
+  motion: z
+    .object({ direction: z.enum(["left-to-right", "right-to-left", "toward-camera", "away-from-camera", "static"]), order: short.optional(), cameraSide: short.optional() })
+    .optional(),
+  axisChange: z.boolean().optional(),
+  transition: z.string().max(300).optional(),
   continuity: z.string().max(600),
 });
 
@@ -46,6 +68,8 @@ const PanelSchema = z.object({
   context: ContextSchema.optional(),
   hero: z.boolean().optional(),
   heroReason: z.string().max(300).optional(),
+  complexity: z.enum(COMPLEXITIES).optional(),
+  safeShot: z.string().max(1000).optional(),
 });
 
 const PageSchema = z.object({ layout: z.enum(LAYOUT_IDS), panels: z.array(PanelSchema).min(1).max(6) });
@@ -89,6 +113,11 @@ export async function saveStoryboard(id: string, input: unknown): Promise<ComicS
       cover: editedCover(comic.script.cover, edits.coverChoice, edits.coverScene),
       pages: edits.pages.map((page) => ({ ...page, layout: fitLayout(page.layout, page.panels.length) })),
     };
+    script.pages.forEach((page, p) => page.panels.forEach((panel, i) => panel.context?.cast.forEach(person => {
+      const previous = comic.script?.pages[p]?.panels[i]?.context?.cast.find(old => old.name === person.name);
+      if (previous?.lookChange !== person.lookChange) { person.lookChangeApproved = false; person.lookChangeReviewed = false; }
+    })));
+    invalidateComposition(comic);
     await saveComic({ ...comic, script });
     return script;
   });
@@ -107,7 +136,12 @@ export async function approveStoryboard(id: string): Promise<void> {
         }
       }),
     );
-    await saveComic({ ...comic, stage: "drawing" });
+    const missing = missingApprovals(comic.cast, comic.objects);
+    if (missing.length) throw new UserFacingError(`Approve these designs first: ${missing.join(", ")}.`, 409);
+    const ledger = buildLedger(comic.script, comic.cast, comic.objects);
+    const unresolved = ledger.issues.filter(issue => issue.severity === "hard" && !issue.fixed);
+    if (unresolved.length) throw new UserFacingError(unresolved.map(issue => `${issue.key}: ${issue.message}`).join(" "), 409);
+    await saveComic({ ...comic, script: ledger.script, stage: "drawing", qa: { version: 1, pictures: {} } });
   });
 }
 
@@ -137,6 +171,7 @@ export async function saveLettering(id: string, input: unknown): Promise<ComicSc
         panels: page.panels.map((panel, i) => ({ ...panel, ...edits[p].panels[i] })),
       })),
     };
+    invalidateComposition(comic);
     await saveComic({ ...comic, script });
     return script;
   });

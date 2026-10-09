@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { BALLOON_KINDS, identityOnly, MAX_PAGES, MAX_PANELS, maxHeroPanels, type CastMember, type ComicScript, type Page, type RemixPreset } from "../comic";
+import { BALLOON_KINDS, COMPLEXITIES, identityOnly, MAX_PAGES, MAX_PANELS, maxHeroPanels, sheetOutfit, type CanonObject, type CastMember, type ComicScript, type Page, type RemixPreset } from "../comic";
 import { askClaude } from "../claude";
 import { UserFacingError } from "../errors";
 import { fitLayout, LAYOUT_IDS, layoutMenu } from "../layouts";
@@ -46,10 +46,26 @@ const ContextSchema = z.object({
         wardrobe: z.string().describe("What they wear in THIS scene, fitting age, era, place, activity, event, weather and culture"),
         emotion: z.string(),
         action: z.string().describe("What they are doing / their pose"),
+        insideObject: z.string().describe('Id of the canon object they are in or on (e.g. the car they drive); empty if none'),
+        insidePosition: z.string().describe('Where in it, e.g. "driver\'s seat", "passenger seat", "leaning out of the driver\'s window"; empty if none'),
+        lookChange: z.string().describe('Only for look_policy "ask": a big look change this scene needs (e.g. "red wedding lehenga"); empty otherwise'),
       }),
     )
-    .describe("Everyone visible in the panel"),
-  objects: z.array(z.string()).describe("Props that matter in this panel"),
+    .describe("Everyone visible in the panel, including anyone visible inside a vehicle (even a silhouette)"),
+  objects: z.array(z.string()).describe("Incidental props that matter in this panel (not canon objects)"),
+  canon: z
+    .array(z.object({ id: z.string().describe("Object Bible id"), state: z.string().describe("A defined state id, or empty for as designed"), position: z.string().describe("Where it is in the frame") }))
+    .describe("EVERY canon object visible in this panel, even tiny, distant or in a mirror"),
+  sequence: z.string().describe('Action-sequence id shared by consecutive panels of one continuous action (e.g. "signal-race"); empty if none'),
+  motion: z
+    .object({
+      direction: z.enum(["left-to-right", "right-to-left", "toward-camera", "away-from-camera", "static"]).describe("Travel direction across the frame"),
+      order: z.string().describe('Who is ahead/behind/left/right, e.g. "GT-R a nose ahead; Huracan on its right"'),
+      cameraSide: z.string().describe('Which side of the action the camera is on, e.g. "outside of the bend"'),
+    })
+    .describe("Screen direction; static when nothing travels"),
+  transition: z.string().describe("Explicit time jump or life-stage change; empty for a continuous scene"),
+  axisChange: z.boolean().describe("True only if this panel deliberately crosses the action line (explain it in the scene)"),
   continuity: z.string().describe("What must match the previous panel (same clothes in the same scene, props in hand, mess, light); empty if a new scene"),
 });
 
@@ -89,6 +105,8 @@ const ScriptSchema = z.object({
               "What the artist draws, as a vivid shot description in this style: composition, who is in frame (by name), poses, expressions, key props, mood. No dialogue.",
             ),
           context: ContextSchema,
+          complexity: z.enum(COMPLEXITIES).describe("How hard this is to draw correctly: several vehicles + visible drivers + extreme perspective + smoke/crowds = high or very_high"),
+          safeShot: z.string().describe("A simpler composition of the SAME beat that is easy to draw correctly (used if the ambitious one fails)"),
           hero: z.boolean().describe("True for the book's 1-2 jaw-dropping hero panels only"),
           heroReason: z.string().describe('For hero panels, the narrative reason (e.g. "the reveal", "biggest joke"); otherwise empty'),
         }),
@@ -127,6 +145,14 @@ ${layoutMenu()}
 - Reuse the exact same location wording for panels in the same place, and note continuity (props in hand, spilled tea, rain-soaked clothes) from the previous panel.
 - Fill in the activity, the camera (angle and lens, chosen in this style's camera language) and the relationships in frame, so every picture is built from the same facts instead of being reinvented panel by panel.
 - Identity never changes: a person keeps their face, skin, hair identity and distinctive markers in every panel, at every age and in every outfit.
+
+## Continuity (each panel is drawn separately, so spell out the state)
+- **Object Bible.** Recurring important things (the hero's car, a rival's car, an heirloom) have ids, descriptions and LOCKED attributes. Whenever one is visible, even tiny, in the background or in a mirror, list it in canon. Describe it consistently with its locks and never contradict them; a state change (damage) only if the story causes it, using a defined state.
+- **Occupants.** Anyone in or on a vehicle gets insideObject and insidePosition, and must be listed in cast even if only a silhouette is visible. A vehicle's owner drives it unless the story says otherwise. Respect the driver side.
+- **Action sequences.** Plan the spatial progression of an action sequence before writing its panels (approach → side by side → overtakes → exits ahead). Give its panels the same sequence id. motion.direction is the travel direction across the frame: keep it constant within a sequence (180-degree rule) unless axisChange is true and the scene shows why. motion.order says exactly who is ahead, behind, left and right; it must follow the story (if he's a nose ahead, he's a nose ahead).
+- **No accidental extras.** Each named character appears at most once per panel. No extra vehicles or people in action scenes beyond those the story has.
+- **Complexity.** Rate every panel. Several vehicles + visible drivers + extreme perspective + smoke, crowds or reflections is high or very_high. Keep very_high for hero panels; otherwise prefer the composition that keeps the beat readable. Always write a safeShot: the same beat as a simple, clear composition (e.g. a clean rear three-quarter view of both cars with obvious road geometry and drivers not exposed).
+- **Look policies.** look_policy "keep": wardrobe is exactly "approved outfit" (their design-sheet outfit for that life stage). "story": dress them for the scene. "ask": wardrobe "approved outfit", but if the story genuinely needs a big change (wedding clothes, a uniform, a costume), describe it in lookChange.
 
 ## Writing that makes sense to a stranger
 - Write for a reader who doesn't know these people. Every page must make sense on its own and in sequence.
@@ -169,7 +195,7 @@ Rules:
 - Polish the title and tagline, and offer 2-3 alternative titles with different angles (funny, poignant, bold).`;
 
 /** Pass 1: the writer. */
-export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[], preset?: RemixPreset): Promise<ComicScript> {
+export async function writeScript(story: string, style: ComicStyle, cast?: CastMember[], preset?: RemixPreset, objects: CanonObject[] = []): Promise<ComicScript> {
   // Recreate: borrow another comic's format (structure, pacing), never its content.
   const presetNotes = preset
     ? `\n\n<format_template>\nThe person chose to recreate the format of a comic they liked: reuse its creative recipe, never its content. Adapted to THIS story: about ${preset.pageCount} pages and ${preset.panelCount} panels, ${preset.pacing} pacing, page layouts in roughly this order: ${preset.layoutPattern.join(", ")}.${preset.heroCount ? ` ${preset.heroCount} hero panel(s), placed around ${(preset.heroPlacement ?? []).map((at) => `${Math.round(at * 100)}%`).join(" and ")} of the way through.` : ""}${preset.dialogue ? ` Dialogue treatment: ${preset.dialogue} (about ${Math.round((preset.silentShare ?? 0) * 100)}% silent panels${preset.sfxShare ? `, sound effects in about ${Math.round(preset.sfxShare * 100)}% of panels` : ""}).` : ""} Adjust where this story clearly needs it.\n</format_template>`
@@ -186,13 +212,22 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
             main_stage: member.mainStage ? { id: "main", ...member.mainStage } : { id: "main" },
             other_stages: (member.stages ?? []).map(({ id, label, ageRange }) => ({ id, label, ageRange })),
             wardrobe_notes: member.wardrobe ?? "",
+            look_policy: member.lookPolicy ?? "story",
+            approved_outfit: sheetOutfit(member.description) || undefined,
           })),
           null,
           1,
         )}\n</cast_bible>\nThis cast is authoritative. Use their names exactly (including punctuation) in the character list, cover scene, panel scenes, scene context and speakers. Respect their identity; do not invent replacement looks or bring back removed named characters. Extra unnamed background people are fine. In every scene, name each cast member visible in frame, and choose their stage and wardrobe in the scene context.`;
+  const objectNotes = objects.length
+    ? `\n\n<object_bible>\n${JSON.stringify(
+        objects.map(({ id, name, kind, role, owner, description, locks, driverSide, states }) => ({ id, name, kind, role, owner, description, locks, driverSide, states })),
+        null,
+        1,
+      )}\n</object_bible>\nThese objects are canon: list them in each panel's canon whenever visible and never contradict their locks.`
+    : "";
   const draft = await askClaude({
     system: WRITER_PROMPT,
-    user: `Art style: ${style.label} — ${style.blurb}.\nHow this style tells stories: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}${presetNotes}`,
+    user: `Art style: ${style.label} — ${style.blurb}.\nHow this style tells stories: ${style.storytelling}\n\n<story>\n${story}\n</story>${castNotes}${objectNotes}${presetNotes}`,
     schema: ScriptSchema,
     effort: "high",
     operation: "comic-director",
@@ -208,8 +243,22 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
         sfx: panel.sfx.trim() || undefined,
         hero: panel.hero || undefined,
         heroReason: panel.hero ? panel.heroReason : undefined,
-        // "main" means the character's main age; stored as "".
-        context: { ...panel.context, cast: panel.context.cast.map((person) => ({ ...person, stage: person.stage === "main" ? "" : person.stage })) },
+        complexity: panel.complexity,
+        safeShot: panel.safeShot.trim() || undefined,
+        context: {
+          ...panel.context,
+          sequence: panel.context.sequence.trim() || undefined,
+          transition: panel.context.transition.trim() || undefined,
+  axisChange: panel.context.axisChange || undefined,
+          canon: panel.context.canon.map((object) => ({ id: object.id, state: object.state.trim() || undefined, position: object.position.trim() || undefined })),
+          // "main" means the character's main age; stored as "".
+          cast: panel.context.cast.map(({ insideObject, insidePosition, lookChange, ...person }) => ({
+            ...person,
+            stage: person.stage === "main" ? "" : person.stage,
+            inside: insideObject.trim() ? { objectId: insideObject.trim(), position: insidePosition.trim() } : undefined,
+            lookChange: lookChange.trim() || undefined,
+          })),
+        },
       }));
       return { layout: fitLayout(page.layout, panels.length), panels };
     });

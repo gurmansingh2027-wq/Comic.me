@@ -110,6 +110,8 @@ const PRICE_FOR: Record<CostItem, number> = {
   cast: PRICES.smallClaudeCall,
   "photo-check": PRICES.smallClaudeCall,
   "character-design": PRICES.characterDesign,
+  "object-design": PRICES.characterDesign,
+  qa: PRICES.smallClaudeCall,
   "design-description": PRICES.smallClaudeCall,
   script: PRICES.script,
   picture: PRICES.picture,

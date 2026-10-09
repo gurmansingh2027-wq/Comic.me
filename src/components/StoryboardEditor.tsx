@@ -333,6 +333,10 @@ export default function StoryboardEditor({
                     What we see (for the artist)
                     <textarea value={panel.scene} rows={2} maxLength={2000} onChange={(e) => setPanel(p, i, (pn) => ({ ...pn, scene: e.target.value }))} placeholder="Who is in the panel, where, doing what, how they feel" className={`${field} resize-y`} />
                   </label>
+                  {panel.context?.cast.filter(person => person.lookChange).map(person => <div key={person.name} className="space-y-2 rounded border-2 border-ink bg-paper p-3 text-sm">
+                    <p><strong>{person.name}: proposed look change</strong> — {person.lookChange}</p>
+                    <div className="flex gap-2">{[[true, "Use this change"], [false, "Keep approved look"]].map(([use, label]) => <button key={String(use)} className={small} aria-pressed={!!person.lookChangeReviewed && person.lookChangeApproved === use} onClick={() => setPanel(p, i, old => ({ ...old, context: { ...panel.context!, cast: panel.context!.cast.map(who => who.name === person.name ? { ...who, lookChangeApproved: use === true, lookChangeReviewed: true } : who) } }))}>{person.lookChangeReviewed && person.lookChangeApproved === use ? "✓ " : ""}{label}</button>)}</div>
+                  </div>)}
                   {panel.context && (
                     <SceneDetails
                       context={panel.context}
@@ -548,6 +552,7 @@ function SceneDetails({
               [
                 ["location", "Where"],
                 ["period", "Year / era"],
+                ["transition", "Time or scene change"],
                 ["timeOfDay", "Time of day"],
                 ["weather", "Weather"],
                 ["event", "Occasion"],
@@ -556,7 +561,7 @@ function SceneDetails({
             ).map(([key, label]) => (
               <label key={key} className="space-y-0.5 font-bold">
                 {label}
-                <input value={context[key]} maxLength={300} onChange={(e) => onChange({ ...context, [key]: e.target.value })} className={compact + " w-full"} />
+                <input value={context[key] ?? ""} maxLength={300} onChange={(e) => onChange({ ...context, [key]: e.target.value })} className={compact + " w-full"} />
               </label>
             ))}
           </div>

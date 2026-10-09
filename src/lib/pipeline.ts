@@ -1,5 +1,5 @@
 import "server-only";
-import { castReady, type Comic } from "./comic";
+import { castReady, missingApprovals, type Comic } from "./comic";
 import { addCost } from "./costs";
 import { designCover } from "./engines/cover";
 import { polishScript, writeScript } from "./engines/story";
@@ -34,8 +34,8 @@ export function prepareWriting(id: string): Promise<boolean> {
     if (!comic) throw new UserFacingError("Comic not found.", 404);
     if (comic.status === "ready") throw new UserFacingError("This comic is already written.", 409);
     if (isRunning(id) || ((comic.status === "writing" || comic.status === "polishing") && !isStale(comic))) return false;
-    if ((comic.status === "draft" && comic.cast === undefined) || (comic.cast !== undefined && !castReady(comic.cast))) {
-      throw new UserFacingError("Approve the main and supporting character designs before making your comic.", 409);
+    if ((comic.status === "draft" && comic.cast === undefined) || (comic.cast !== undefined && !castReady(comic.cast, comic.objects))) {
+      throw new UserFacingError(`Approve these designs first: ${missingApprovals(comic.cast, comic.objects).join(", ")}.`, 409);
     }
     // From here on the comic belongs to the Storyboard step: nothing is drawn until it's approved.
     await saveComic({ ...comic, status: "writing", stage: "storyboard", error: undefined });
@@ -50,13 +50,13 @@ export async function runWriting(id: string): Promise<void> {
   try {
     comic = await loadComic(id);
     if (!comic) return;
-    if (comic.status === "draft" || (comic.cast !== undefined && !castReady(comic.cast))) throw new UserFacingError("Approve your characters first.", 409);
+    if (comic.status === "draft" || (comic.cast !== undefined && !castReady(comic.cast, comic.objects))) throw new UserFacingError("Approve your characters first.", 409);
     const style = getStyle(comic.styleId);
     if (!style) throw new Error(`Unknown style ${comic.styleId}`);
 
     comic = { ...comic, status: "writing", stage: "storyboard", error: undefined };
     await saveComic(comic);
-    const direct = await metered(() => writeScript(comic!.story, style, comic!.cast, comic!.preset));
+    const direct = await metered(() => writeScript(comic!.story, style, comic!.cast, comic!.preset, comic!.objects));
     const draft = direct.result;
 
     comic = { ...comic, status: "polishing", script: draft };

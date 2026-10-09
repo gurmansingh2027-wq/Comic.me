@@ -6,7 +6,7 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/comics/[id]
   const { id, file } = await ctx.params;
   if (!isValidCastFile(file)) return new Response("Not found", { status: 404 });
   const comic = await loadComic(id);
-  const referenced = comic?.cast?.some(
+  const referenced = comic?.objects?.some(object => object.design?.file === file) || comic?.cast?.some(
     (member) =>
       member.photos.includes(file) || member.design?.file === file || member.stages?.some((stage) => stage.design?.file === file),
   );

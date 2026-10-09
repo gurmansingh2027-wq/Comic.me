@@ -1,0 +1,66 @@
+{
+  "comicId": "ea55da3f-333e-40b6-9d61-0b754dd72f87",
+  "note": "Labelled failure dataset from 'Corners Are for Winning' (see research/corners-are-for-winning-failure-analysis.md). The comic's pictures live in local storage only (not in the repo). Used by the visual QA evaluation (scripts/qa-eval.ts).",
+  "objects": [
+    {
+      "id": "huracan",
+      "name": "Gunit's Huracan",
+      "kind": "vehicle",
+      "role": "hero",
+      "owner": "Gunit",
+      "description": "Two-seater Lamborghini Huracan, heavily tuned in the Tokyo style.",
+      "locks": [
+        "pearl-white paint (never yellow, orange, green or black)",
+        "wide fender flares and aggressive camber",
+        "small carbon ducktail spoiler (NOT a big wing)",
+        "red-and-black wave and kanji-style sticker bomb on the rear quarter"
+      ],
+      "driverSide": "right",
+      "referenceKey": "1-3"
+    },
+    {
+      "id": "gt-r",
+      "name": "the GT-R",
+      "kind": "vehicle",
+      "role": "opponent",
+      "owner": "The Cocky Stranger",
+      "description": "Matte-grey, heavily modified Nissan GT-R with a giant rear wing.",
+      "locks": ["matte-grey paint", "giant rear wing", "GT-R body shape (a coupe, not a sedan)"],
+      "driverSide": "right",
+      "referenceKey": "4-5"
+    },
+    {
+      "id": "pcr-van",
+      "name": "Delhi Police PCR van",
+      "kind": "vehicle",
+      "role": "recurring",
+      "owner": "Delhi Police Officer",
+      "description": "White Delhi Police PCR van with a blue-and-red light bar.",
+      "locks": ["a VAN (not a sedan)", "white body", "light bar on the roof"],
+      "referenceKey": "9-1"
+    }
+  ],
+  "cases": [
+    { "key": "2-3", "expect": ["LIVERY_LOSS", "VEHICLE_BODY_DRIFT"] },
+    { "key": "4-1", "expect": ["LIVERY_LOSS"] },
+    { "key": "4-6", "expect": ["WRONG_OCCUPANT"] },
+    { "key": "5-1", "expect": ["WRONG_SCREEN_DIRECTION", "LIVERY_LOSS"] },
+    { "key": "6-2", "expect": ["ACTION_CONTINUITY_FAILURE"] },
+    { "key": "7-2", "expect": ["MAIN_VEHICLE_COLOUR_DRIFT"] },
+    { "key": "7-3", "expect": ["MAIN_VEHICLE_COLOUR_DRIFT"] },
+    { "key": "8-2", "expect": ["OPPONENT_DUPLICATION"] },
+    { "key": "10-3", "expect": ["MAIN_VEHICLE_COLOUR_DRIFT"] },
+    { "key": "10-4", "expect": ["OPPONENT_VEHICLE_IDENTITY_DRIFT"] },
+    { "key": "11-1", "expect": ["LIVERY_LOSS", "VEHICLE_BODY_DRIFT"] },
+    { "key": "12-2", "expect": ["DUPLICATE_CHARACTER"] },
+    { "key": "12-3", "expect": ["LIVERY_MUTATION"] },
+    { "key": "1-4", "expect": [] },
+    { "key": "3-1", "expect": [] },
+    { "key": "3-4", "expect": [] },
+    { "key": "6-3", "expect": [] },
+    { "key": "7-1", "expect": [] },
+    { "key": "9-2", "expect": [] },
+    { "key": "9-3", "expect": [] },
+    { "key": "10-1", "expect": [] }
+  ]
+}

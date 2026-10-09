@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { askClaude, imageBlock } from "../claude";
-import type { CastMember, Intake, PhotoVerdict } from "../comic";
+import type { CanonObject, CastMember, Intake, PhotoVerdict } from "../comic";
 import { UserFacingError } from "../errors";
 import type { ComicStyle } from "../styles";
 import { recordUsage } from "../meter";
@@ -27,7 +27,27 @@ const StageSchema = z.object({
   outfit: z.string().describe("What they typically wear in this chapter of life, fitting the age, era, place and culture (e.g. school uniform, hostel T-shirt and jeans, office shirt)"),
 });
 
+const ObjectSchema = z.object({
+  name: z.string().describe('Short name used in the comic, e.g. "Gunit\'s Huracan", "the GT-R", "Nani\'s brass lamp"'),
+  kind: z.enum(["vehicle", "prop", "creature", "place"]),
+  role: z.enum(["hero", "opponent", "recurring", "prop"]).describe("hero = the protagonist's, opponent = the rival's, recurring = appears in several scenes"),
+  owner: z.string().describe("Cast name of who owns, drives or carries it; empty if nobody"),
+  description: z
+    .string()
+    .describe("Precise visual description: make/model/era for vehicles, shape, materials, colours, distinctive details. Specific enough to draw the same thing 30 times."),
+  locks: z
+    .array(z.string())
+    .describe(
+      'Identity-critical attributes that must never change, each short and checkable: base colour, accent colour, livery/decals (what, where), body kit, spoiler type ("carbon ducktail, NOT a big wing"), wheels, distinctive marks',
+    ),
+  driverSide: z.enum(["left", "right", "none"]).describe("Vehicles: steering wheel side for where the story happens (right in India, the UK, Japan); none otherwise"),
+  states: z.array(z.object({ label: z.string(), description: z.string() })).describe('Story-driven changes of state, e.g. "Damaged" after a crash. Usually empty.'),
+});
+
 const CastSchema = z.object({
+  objects: z
+    .array(ObjectSchema)
+    .describe("Recurring important THINGS (not people): a car central to the story, a rival's car, an heirloom, a signature bike. Only things that appear in several scenes or carry the story. Usually 0-3."),
   cast: z.array(
     z.object({
       name: z.string().describe("The name to use in the comic"),
@@ -62,7 +82,9 @@ Identity is what keeps someone recognisable in any outfit, at any age and in any
 
 Life stages: work out the timeline yourself; never make the user explain it. Read the story for time jumps and life chapters: "when we were kids", "in Class 10", "at college", "ten years later", "at our wedding", "when I started the company", "now in her 80s", years ("in 2004… by 2019"), and implied ages (school exams, first job, retirement). If someone visibly appears in chapters that are about 5+ years apart, or in different life phases (child, teen, young adult, adult, older), each chapter is a stage. mainStage is the chapter they appear in most; otherStages lists the others in story order, at most 3. Each stage must look genuinely different (height, proportions, face, hair of the time, outfit, accessories) while staying recognisably the same person. If everything happens within a few years, otherStages must be empty. Minor characters never need stages.
 
-Where the story doesn't say how someone looks, suggest a plausible, specific look that fits their age, culture and era.`;
+Where the story doesn't say how someone looks, suggest a plausible, specific look that fits their age, culture and era.
+
+Important things (Object Bible): list recurring vehicles and objects the story depends on, like a character. Use every visual detail the story gives (colour, model, modifications, stickers, wear) and fill gaps with specific, plausible choices. Locks are the attributes that make it THIS thing and must never drift between pictures: be explicit about colour and about what it is NOT (e.g. "pearl-white paint (never yellow, orange or green)", "small carbon ducktail spoiler, not a big wing"). Never use real brand logos as decals.`;
 
 type PlannedMember = Pick<CastMember, "name" | "role" | "importance" | "identity" | "wardrobe" | "description"> & {
   mainStage: { label: string; ageRange: string };
@@ -75,9 +97,11 @@ export function describeIdentity(identity: NonNullable<CastMember["identity"]>, 
   return `${look} Face: ${identity.face}. Skin: ${identity.skin}. Hair: ${identity.hair}. Build: ${identity.body}.${markers}`;
 }
 
-export async function planCast(story: string, intake?: Intake): Promise<PlannedMember[]> {
+export type PlannedObject = Omit<CanonObject, "id" | "design" | "designAttempts" | "lastDesignRequestId">;
+
+export async function planCast(story: string, intake?: Intake): Promise<{ cast: PlannedMember[]; objects: PlannedObject[] }> {
   const notes = intake?.characters.map((c) => `- ${c.name}: ${c.role}. Looks: ${c.look}`).join("\n") ?? "";
-  const { cast } = await askClaude({
+  const { cast, objects } = await askClaude({
     system: CAST_PROMPT,
     user: `<story>\n${story}\n</story>\n\n<interviewer_notes>\n${notes}\n</interviewer_notes>`,
     schema: CastSchema,
@@ -85,7 +109,7 @@ export async function planCast(story: string, intake?: Intake): Promise<PlannedM
     operation: "cast-planner",
     maxTokens: 24000,
   });
-  return cast.slice(0, 12).map((person) => ({
+  const people = cast.slice(0, 12).map((person) => ({
     name: person.name,
     role: person.role,
     importance: person.importance,
@@ -95,6 +119,17 @@ export async function planCast(story: string, intake?: Intake): Promise<PlannedM
     mainStage: { label: person.mainStage.label, ageRange: person.mainStage.ageRange },
     stages: person.importance === "minor" ? [] : person.otherStages.slice(0, 3),
   }));
+  const things: PlannedObject[] = objects.slice(0, 6).map((object) => ({
+    name: object.name,
+    kind: object.kind,
+    role: object.role,
+    owner: object.owner.trim() || undefined,
+    description: object.description,
+    locks: object.locks.slice(0, 10),
+    driverSide: object.driverSide === "none" ? undefined : object.driverSide,
+    states: object.states.slice(0, 3).map((state, i) => ({ id: `state-${i + 1}`, ...state })),
+  }));
+  return { cast: people, objects: things };
 }
 
 // --- Photo check --------------------------------------------------------------------------------
@@ -232,6 +267,67 @@ export async function drawDesign({
     () => retries++,
   );
   recordImageUsage("character-design", DESIGN_SIZE, references.length, retries, result.usage);
+  const base64 = result.data?.[0]?.b64_json;
+  if (!base64) throw new UserFacingError("The image service didn't return a design. Please try again.", 502);
+  return Buffer.from(base64, "base64");
+}
+
+// --- Object canon sheets (Object Bible) -------------------------------------------------------------
+
+export const OBJECT_SHEET_SIZE = "1536x1024";
+
+/**
+ * A canon "model sheet" for a recurring object: several fixed views of exactly the same thing, so
+ * every panel can be drawn from the same reference instead of a phrase like "white sports car".
+ */
+export async function drawObjectDesign({
+  object,
+  style,
+  previousDesignPath,
+  feedback,
+}: {
+  object: CanonObject;
+  style: ComicStyle;
+  previousDesignPath?: string;
+  feedback?: string;
+}): Promise<Buffer> {
+  const styleSample = path.join(process.cwd(), "public", "styles", `${style.id}.webp`);
+  const references = [...(previousDesignPath ? [previousDesignPath] : []), ...(existsSync(styleSample) ? [styleSample] : [])];
+  const views =
+    object.kind === "vehicle"
+      ? "Layout: a clean model sheet of the SAME vehicle in four views on a plain light background: front three-quarter (top left), rear three-quarter (top right), full side profile (bottom left), and straight top-down (bottom right). Identical colour, livery, decals, wheels and body kit in every view. No people in or around it."
+      : "Layout: a clean model sheet of the SAME object in three views on a plain light background: front, side and three-quarter. Identical colours and details in every view.";
+  const prompt = [
+    references.length > 0 &&
+      `Reference images: ${[previousDesignPath && "image 1 is the current version of this sheet", existsSync(styleSample) && `image ${references.length} shows the target art style only (ignore its subject)`].filter(Boolean).join("; ")}.`,
+    previousDesignPath &&
+      `Requested change (apply it clearly): ${feedback?.trim() || "a cleaner, more accurate version"}. Keep everything else the same.`,
+    `A canon reference sheet for a comic book: ${object.name}. ${object.description}`,
+    `These attributes are LOCKED and must be exactly right in every view: ${object.locks.join("; ")}.`,
+    `Art style: ${style.art}`,
+    views,
+    "IMPORTANT: Do not draw any text, labels, logos, licence-plate text or watermarks.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (fakeImagesEnabled()) {
+    recordUsage({ provider: "openai", model: "test-placeholder", operation: "object-design.fake", image: { size: OBJECT_SHEET_SIZE, quality: "test", references: references.length }, usd: 0, measured: false });
+    return fakeImage(OBJECT_SHEET_SIZE, object.name);
+  }
+  const client = imageClient();
+  let retries = 0;
+  const result = await withRateLimitRetry(
+    async () => {
+      if (references.length === 0) {
+        return client.images.generate({ model: IMAGE_MODEL(), prompt, size: OBJECT_SHEET_SIZE, quality: imageQuality(), output_format: "webp", output_compression: 88 });
+      }
+      const images = await Promise.all(references.map(referenceFile));
+      return client.images.edit({ model: IMAGE_MODEL(), image: images, prompt, size: OBJECT_SHEET_SIZE, quality: imageQuality(), output_format: "webp", output_compression: 88 });
+    },
+    () => retries++,
+  );
+  recordImageUsage("object-design", OBJECT_SHEET_SIZE, references.length, retries, result.usage);
   const base64 = result.data?.[0]?.b64_json;
   if (!base64) throw new UserFacingError("The image service didn't return a design. Please try again.", 502);
   return Buffer.from(base64, "base64");

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { qaStatus } from "@/lib/qa/service";
+type QaStatus = ReturnType<typeof qaStatus>;
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type Panel } from "@/lib/comic";
 import { COPY, pick } from "@/lib/copy";
@@ -24,15 +26,16 @@ type Props = {
   alreadyDrawn: string[];
   /** Whether the comic is on the Explore page (on by default for now). */
   initialPublished?: boolean;
+  initialQa: QaStatus;
 };
 
 /**
  * Step 5: draws every picture of an approved storyboard, then lets people edit the lettering.
  * Writing and storyboard review happen on step 4; this page is only reached after approval.
  */
-export default function ComicViewer({ comicId, styleId, script, alreadyDrawn, initialPublished = true }: Props) {
+export default function ComicViewer({ comicId, styleId, script, alreadyDrawn, initialPublished = true, initialQa }: Props) {
   const style = getStyle(styleId)!;
-  return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} initialPublished={initialPublished} />;
+  return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} initialPublished={initialPublished} initialQa={initialQa} />;
 }
 
 // --- Step 2: draw every picture, a few at a time ----------------------------------------------
@@ -43,7 +46,9 @@ function ComicDrawing({
   style,
   alreadyDrawn,
   initialPublished,
+  initialQa,
 }: {
+  initialQa: QaStatus;
   initialPublished: boolean;
   comicId: string;
   script: ComicScript;
@@ -59,11 +64,19 @@ function ComicDrawing({
   const keys = useMemo(() => imageKeys(initialScript), [initialScript]);
   const names = useMemo(() => script.characters.map((c) => c.name), [script.characters]);
   const [statuses, setStatuses] = useState<Record<string, ImageStatus>>(() =>
-    Object.fromEntries(keys.map((key) => [key, alreadyDrawn.includes(key) ? "ready" : "waiting"])),
+    Object.fromEntries(keys.map((key) => [key, alreadyDrawn.includes(key) ? "ready" : initialQa.pictures[key]?.status === "blocked" ? "error" : "waiting"])),
   );
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(initialQa.pictures).filter(([, value]) => value.status === "blocked").map(([key, value]) => [key, value.notes ?? "This picture needs another try."])));
   const [images, setImages] = useState<Record<string, HTMLImageElement>>({});
   const [downloading, setDownloading] = useState(false);
+  const [qa, setQa] = useState(initialQa);
+  const [checking, setChecking] = useState(false);
+  const [qaError, setQaError] = useState<string | null>(null);
+  const checkingRef = useRef(false);
+  const qaAttempt = useRef("");
+  const restarts = useRef<Record<string, string>>({});
+  const redrawRequests = useRef<Record<string, { requestId: string; expectedDigest?: string; feedback: string }>>({});
+
 
   const [drawingSince, setDrawingSince] = useState<Record<string, number>>({});
   const statusRef = useRef(statuses);
@@ -89,9 +102,9 @@ function ComicDrawing({
   const draw = useCallback(
     async (key: string) => {
       for (let attempt = 0; ; attempt++) {
-        const response = await fetch(`/api/comics/${comicId}/images/${key}`, { method: "POST" }).catch(() => null);
+        const response = await fetch(`/api/comics/${comicId}/images/${key}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(restarts.current[key] ? { restart: true, requestId: restarts.current[key] } : {}) }).catch(() => null);
         if (response?.ok) return;
-        const retryable = !response || response.status === 429 || response.status >= 500;
+        const retryable = !response || response.status === 425 || response.status === 429 || response.status >= 500;
         if (!retryable || attempt >= 2) {
           const data = await response?.json().catch(() => ({}));
           throw new Error(data?.error ?? "Something went wrong.");
@@ -106,7 +119,7 @@ function ComicDrawing({
   const startWorkers = useCallback(() => {
     const worker = async () => {
       for (;;) {
-        const next = keys.find((key) => statusRef.current[key] === "waiting");
+        const next = keys.find((key) => statusRef.current[key] === "waiting" && (!initialQa.dependencies[key] || statusRef.current[initialQa.dependencies[key]] === "ready"));
         if (!next) return;
         setKeyStatus(next, "drawing");
         setDrawingSince((current) => ({ ...current, [next]: Date.now() }));
@@ -116,6 +129,7 @@ function ComicDrawing({
         } catch (err) {
           setErrors((current) => ({ ...current, [next]: (err as Error).message }));
           setKeyStatus(next, "error");
+          void fetch(`/api/comics/${comicId}/qa`).then(r => r.json()).then(setQa);
         }
       }
     };
@@ -123,13 +137,14 @@ function ComicDrawing({
       active.current++;
       worker().finally(() => active.current--);
     }
-  }, [keys, draw, setKeyStatus]);
+  }, [keys, draw, setKeyStatus, initialQa.dependencies, comicId]);
 
   useEffect(() => {
     startWorkers();
   }, [startWorkers]);
 
   const retry = (key: string) => {
+    if (qa.pictures[key]?.status === "blocked") restarts.current[key] = crypto.randomUUID();
     setKeyStatus(key, "waiting");
     startWorkers();
   };
@@ -139,13 +154,17 @@ function ComicDrawing({
     setKeyStatus(key, "drawing");
     setDrawingSince((current) => ({ ...current, [key]: Date.now() }));
     try {
+      const current: QaStatus = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
+      if (!redrawRequests.current[key] || redrawRequests.current[key].feedback !== feedback || redrawRequests.current[key].expectedDigest !== current.pictures[key]?.digest) redrawRequests.current[key] = { requestId: crypto.randomUUID(), expectedDigest: current.pictures[key]?.digest, feedback };
+      setQa({ ...current, ready: false });
       const response = await fetch(`/api/comics/${comicId}/images/${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ redraw: true, feedback }),
+        body: JSON.stringify({ redraw: true, ...redrawRequests.current[key] }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "Couldn't redraw this panel.");
+      delete redrawRequests.current[key];
       setVersions((current) => ({ ...current, [key]: (current[key] ?? 0) + 1 }));
       setImages((current) => {
         const next = { ...current };
@@ -166,6 +185,7 @@ function ComicDrawing({
     const body = JSON.stringify({ pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue, sfx, sfxPos }) => ({ caption, captionPos, dialogue, sfx, sfxPos })) })) });
     if (lastSaved.current === null) lastSaved.current = body;
     if (body === lastSaved.current) return;
+    setQa(current => ({ ...current, ready: false }));
     setSaveState("saving");
     const timer = setTimeout(async () => {
       const response = await fetch(`/api/comics/${comicId}/lettering`, {
@@ -194,16 +214,69 @@ function ComicDrawing({
   // Several pictures draw at once, within OpenAI's per-minute limit; pad for the last few.
   const secondsLeft = waitingCount * ESTIMATES.picturePerComic + (drawingCount > 0 ? ESTIMATES.picture : 0);
 
+  async function runChecks() {
+    if (checkingRef.current || !allReady || saveState !== "saved") return;
+    checkingRef.current = true; setChecking(true); setQaError(null);
+    try {
+      let current: QaStatus = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
+      for (let round = 0; round < 3 && current.required && !current.ready; round++) {
+        const before = current.revision;
+        const pageIds = [...(script.cover ? ["cover"] : []), ...script.pages.map((_, p) => String(p + 1))];
+        for (const page of pageIds) {
+          if (current.pages[page]?.status === "accepted") continue;
+          const canvas = await renderFullPage(page === "cover" ? { kind: "cover" } : { kind: "page", index: Number(page) - 1 }, script, key => `${imageUrl(comicId, key)}?qa=${current.revision}`, style, renderFonts);
+          const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
+          if (!blob) throw new Error("Couldn't prepare this page for checking.");
+          const response = await fetch(`/api/comics/${comicId}/qa?page=${page}&revision=${current.revision}`, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error ?? "Page check interrupted.");
+          current = result;
+          if (current.revision !== before) break;
+        }
+        if (current.revision === before) {
+          const response = await fetch(`/api/comics/${comicId}/qa`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "final", revision: current.revision }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error ?? "Final check interrupted.");
+          current = result;
+          if (current.revision === before && !current.ready) break;
+        }
+        if (current.revision !== before) {
+          setImages({}); setVersions(value => Object.fromEntries(keys.map(key => [key, (value[key] ?? 0) + 1])));
+        }
+      }
+      setQa(current);
+      if (!current.ready) setQaError(current.final?.notes || "Some pictures need attention before export. Review the findings below, then retry checks.");
+    } catch (error) { setQaError((error as Error).message); }
+    finally { checkingRef.current = false; setChecking(false); }
+  }
+  const checkVersion = JSON.stringify([script, versions]);
+  useEffect(() => {
+    if (!allReady || saveState !== "saved" || checkingRef.current || qaAttempt.current === checkVersion) return;
+    qaAttempt.current = checkVersion;
+    void runChecks();
+    // The revision key covers every local content change; errors require an explicit retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allReady, saveState, checkVersion]);
+
+  async function requireExportReady() {
+    if (saveState !== "saved" || checkingRef.current) throw new Error("Wait for saved changes and continuity checks before downloading.");
+    const current: QaStatus = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
+    setQa(current);
+    if (!current.ready) throw new Error("Finish continuity checks before downloading.");
+  }
+
   async function handleDownload() {
     setDownloading(true);
     try {
+      await requireExportReady();
       await downloadComicPdf(script, urlFor, style, renderFonts);
-    } finally {
+    } catch (error) { setQaError((error as Error).message); } finally {
       setDownloading(false);
     }
   }
 
   async function savePage(which: "cover" | number) {
+    try { await requireExportReady(); } catch (error) { setQaError((error as Error).message); return; }
     const source = which === "cover" ? ({ kind: "cover" } as const) : ({ kind: "page", index: which } as const);
     const canvas = await renderFullPage(source, script, urlFor, style, renderFonts);
     await downloadPagePng(canvas, script.title, which === "cover" ? "cover" : `page-${which + 1}`);
@@ -245,7 +318,7 @@ function ComicDrawing({
           <button
             type="button"
             onClick={handleDownload}
-            disabled={!allReady || downloading}
+            disabled={!allReady || downloading || !qa.ready || checking || saveState !== "saved"}
             className="comic-box bg-zap px-8 py-3 font-title text-2xl tracking-wide text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
           >
             {downloading ? "Preparing PDF…" : "⬇ Download PDF"}
@@ -256,7 +329,15 @@ function ComicDrawing({
         </div>
       </div>
 
-      {allReady && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
+      {qa.required && <section aria-live="polite" className="comic-box space-y-3 bg-white p-4">
+        <p className="font-bold">{checking ? "Checking continuity and page readability…" : qa.ready && saveState === "saved" ? "Continuity checks complete." : "Continuity checks must finish before downloading or sharing."}</p>
+        {qaError && <p role="alert" className="text-red-700">{qaError}</p>}
+        {Object.entries(qa.pictures).filter(([, picture]) => picture.status === "blocked" || picture.status === "error").map(([key, picture]) => <p key={key} className="text-sm">{key}: {picture.notes || "This picture needs another try."}</p>)}
+        {[...Object.values(qa.pages).flatMap(page => page?.findings ?? []), ...(qa.final?.findings ?? [])].map((finding, i) => <p key={i} className="text-sm">{finding.key}: {finding.what}</p>)}
+        {allReady && !checking && !qa.ready && <button className="rounded border-2 border-ink px-4 py-2 font-bold" disabled={saveState !== "saved"} onClick={runChecks}>Retry checks</button>}
+      </section>}
+
+      {allReady && qa.ready && saveState === "saved" && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
 
       {allReady && (
         <p className="text-center text-sm text-neutral-700">

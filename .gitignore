@@ -57,3 +57,6 @@ next-env.d.ts
 !/research/visual-references/02_current_boring_cover.png
 
 /.next-real/
+
+/.next-qa-test/
+/.next-qa-build/

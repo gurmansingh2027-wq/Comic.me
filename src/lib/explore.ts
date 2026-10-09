@@ -1,4 +1,5 @@
 import "server-only";
+import { exportReady } from "./qa/state";
 import { drawingApproved, onExplore, panelKey, remixPresetFor, type Comic, type CoverDesign, type Page } from "./comic";
 import { LAYOUTS } from "./layouts";
 import { hasImage, listComics } from "./storage";
@@ -43,7 +44,7 @@ const imageSrc = (comicId: string, key: string) => `/api/comics/${comicId}/image
 const clampAspect = (aspect: number) => Math.min(Math.max(aspect, 0.42), 2.6);
 
 export async function explorableComic(comic: Comic, panelLimit = 4): Promise<ExploreComic | null> {
-  if (!onExplore(comic) || !comic.script || !drawingApproved(comic)) return null;
+  if (!onExplore(comic) || !exportReady(comic) || !comic.script || !drawingApproved(comic)) return null;
   const script = comic.script;
   const styleLabel = getStyle(comic.styleId)?.label ?? comic.styleId;
   const base = { comicId: comic.id, title: script.title, styleId: comic.styleId, styleLabel, descriptor: script.tagline };

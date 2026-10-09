@@ -1,7 +1,8 @@
 import "server-only";
 import { createReadStream } from "node:fs";
 import OpenAI, { toFile } from "openai";
-import type { ComicScript, CoverDesign, Importance, SceneContext } from "../comic";
+import { identityOnly, type CanonObject, type ComicScript, type CoverDesign, type Importance, type Motion, type SceneContext } from "../comic";
+import type { LedgerEntry, LedgerObject, LedgerPerson } from "../continuity";
 import { mentionsCharacter } from "../cast-matching";
 import { imageCost, imageTokenCost } from "../costs";
 import { requireEnv, UserFacingError } from "../errors";
@@ -17,8 +18,8 @@ import { familyGuidance } from "./cover";
 
 const QUALITIES = ["low", "medium", "high"] as const;
 type Quality = (typeof QUALITIES)[number];
-/** Most reference images we send with one panel. */
-const MAX_REFERENCES = 4;
+/** Most reference images we send with one picture: canon object sheets, character designs and the previous panel. */
+const MAX_REFERENCES = 16;
 
 export const IMAGE_MODEL = () => process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2.5-flare";
 
@@ -47,6 +48,9 @@ export type CastRef = {
   stages?: { id: string; label: string; look: string; designPath?: string }[];
 };
 
+/** An Object Bible entry with its approved canon sheet (if any), for prompts and references. */
+export type ObjectRef = Pick<CanonObject, "id" | "name" | "kind" | "role" | "owner" | "description" | "locks" | "driverSide" | "states"> & { designPath?: string };
+
 export type ArtJob = {
   prompt: string;
   size: string;
@@ -60,6 +64,9 @@ export type ArtJob = {
 /** Redrawing one picture: the current version plus what the user wants changed. */
 export type Revision = { currentPath: string; feedback: string };
 
+/** Visual-QA feedback for an automatic retry, and whether to fall back to the panel's safe shot. */
+export type QaRetry = { fix: string; safe: boolean };
+
 function revisionNotes(revision: Revision | undefined): string | false {
   return (
     !!revision &&
@@ -67,63 +74,95 @@ function revisionNotes(revision: Revision | undefined): string | false {
   );
 }
 
-/** Character notes for the prompt, plus which design pictures to send as references. */
-function castFor(script: ComicScript, text: string, castRefs: CastRef[], offset = 0): { notes: string | false; references: string[] } {
-  const names = [...script.characters.map((c) => c.name), ...castRefs.map((c) => c.name)];
-  const priority = { main: 0, supporting: 1, minor: 2 };
-  const designed = castRefs.filter((ref) => mentionsCharacter(text, ref.name, names))
-    .sort((a, b) => priority[a.importance ?? "supporting"] - priority[b.importance ?? "supporting"])
-    .slice(0, MAX_REFERENCES);
-  const others = script.characters.filter(
-    (character) => mentionsCharacter(text, character.name, names) && !designed.some((ref) => ref.name === character.name),
-  );
-
-  const lines = [
-    ...designed.map(
-      (ref, i) =>
-        `- ${ref.name}: reference image ${i + 1 + offset} is their character design. Draw them exactly like it (face, hair, build, distinctive features). ${ref.description}`,
-    ),
-    ...others.map((character) => `- ${character.name}: ${character.appearance}`),
-  ];
-  return {
-    notes: lines.length > 0 && `Characters (keep their appearance exactly as described):\n${lines.join("\n")}`,
-    references: designed.map((ref) => ref.designPath),
-  };
-}
-
 const sameName = (a: string, b: string) => a.normalize("NFKC").toLowerCase().trim() === b.normalize("NFKC").toLowerCase().trim();
 
-/**
- * Builds the character and setting notes for a panel from its structured scene context: each
- * person's design for the right age is sent as a reference for WHO they are, while their
- * clothes come from the scene, not from the design sheet.
- */
-function contextFor(script: ComicScript, context: SceneContext, castRefs: CastRef[], offset: number): { notes: string; references: string[] } {
-  const references: string[] = [];
+/** Reference pictures for one image, numbered in the order they're sent. */
+class References {
+  readonly paths: string[] = [];
+  constructor(private readonly limit = MAX_REFERENCES) {}
+  add(path: string | undefined): number | null {
+    if (!path || this.paths.length >= this.limit) return null;
+    const existing = this.paths.indexOf(path);
+    if (existing >= 0) return existing + 1;
+    this.paths.push(path);
+    return this.paths.length;
+  }
+}
+
+/** Canon objects in frame: their sheets as references and their LOCKED attributes as hard rules. */
+function objectNotes(entries: LedgerObject[], objectRefs: ObjectRef[], refs: References): string | false {
+  const lines = entries.map((entry) => {
+    const object = objectRefs.find((candidate) => candidate.id === entry.id);
+    if (!object) return null;
+    const n = refs.add(object.designPath);
+    const state = entry.state ? object.states?.find((candidate) => candidate.id === entry.state || candidate.label === entry.state) : undefined;
+    return [
+      `- ${object.name}${n ? `: reference image ${n} is its canon model sheet; draw it EXACTLY like the sheet` : `: ${object.description}`}.`,
+      object.locks.length > 0 && `  LOCKED, must be correct even if small or far away: ${object.locks.join("; ")}.`,
+      state ? `  State in this panel: ${state.label}: ${state.description}.` : "  State: exactly as designed (no damage, no changed decals).",
+      entry.position && `  Position: ${entry.position}.`,
+      object.kind === "vehicle" && object.driverSide && `  Steering wheel and driver on the ${object.driverSide} side.`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+  const present = lines.filter(Boolean);
+  return present.length > 0 && `Canon objects (Object Bible: these must match their sheets exactly; never change their colour or design):\n${present.join("\n")}`;
+}
+
+/** People in frame from the ledger: design sheet for the right age, the outfit rule, and where they physically are. */
+function peopleNotes(script: ComicScript, context: SceneContext | undefined, people: LedgerPerson[], castRefs: CastRef[], objectRefs: ObjectRef[], refs: References): string | false {
   const priority = { main: 0, supporting: 1, minor: 2 };
-  const people = [...context.cast].sort((a, b) => {
+  const sorted = [...people].sort((a, b) => {
     const ra = castRefs.find((ref) => sameName(ref.name, a.name));
     const rb = castRefs.find((ref) => sameName(ref.name, b.name));
     return priority[ra?.importance ?? "minor"] - priority[rb?.importance ?? "minor"];
   });
-
-  const lines = people.map((person) => {
-    // Clothes always come from this panel's scene, never from the design sheet.
+  const lines = sorted.map((person) => {
     const ref = castRefs.find((candidate) => sameName(candidate.name, person.name));
     const stage = person.stage ? ref?.stages?.find((candidate) => candidate.id === person.stage) : undefined;
-    const designPath = stage ? stage.designPath : ref?.designPath;
+    const raw = context?.cast.find((candidate) => sameName(candidate.name, person.name));
     const who = `${person.name}${stage ? ` (${stage.label})` : ""}`;
-    const scene = `In this panel they wear: ${person.wardrobe || "clothes that fit the scene"}. Feeling: ${person.emotion || "as the scene suggests"}. Doing: ${person.action || "as described"}.`;
-    if (designPath && references.length < MAX_REFERENCES) {
-      references.push(designPath);
-      return `- ${who}: reference image ${references.length + offset} is their character design${stage ? " at this age" : ""}. Copy who they are exactly (face, features, skin tone, hair, build, distinctive markers) but NOT the outfit on the sheet. ${scene}`;
+    const n = refs.add(stage ? stage.designPath : ref?.designPath);
+    const outfit = person.wardrobeFromSheet
+      ? `Outfit: copy it from their design sheet (their approved look for this age).`
+      : `In this panel they wear: ${person.wardrobe}${n ? " (NOT the outfit on the design sheet)" : ""}.`;
+    const vehicle = person.inside ? objectRefs.find((object) => object.id === person.inside!.objectId) : undefined;
+    const placement =
+      person.inside &&
+      `${person.name} is INSIDE ${vehicle?.name ?? "the vehicle"} (${person.inside.position || "seated"}): head and torso inside the cabin behind the window glass, never through the door, roof or glass; ${/driv|wheel/i.test(person.inside.position) ? "hands on the steering wheel, facing the direction of travel" : "seated naturally"}.${person.inferred ? " Only visible if the camera can see into the cabin; if visible, it is unmistakably them." : ""}`;
+    const doing = `Feeling: ${raw?.emotion || "as the scene suggests"}. Doing: ${raw?.action || "as described"}.`;
+    if (n) {
+      return [`- ${who}: reference image ${n} is their character design${stage ? " at this age" : ""}. Copy who they are exactly (face, features, skin tone, hair, build, distinctive markers such as a turban, glasses or beard). ${outfit} ${doing}`, placement && `  ${placement}`]
+        .filter(Boolean)
+        .join("\n");
     }
     const character = script.characters.find((candidate) => sameName(candidate.name, person.name));
-    const look = stage?.look ?? ref?.description ?? character?.appearance ?? "";
-    return `- ${who}: ${look} ${scene}`;
+    const look = identityOnly(stage?.look ?? ref?.description ?? character?.appearance ?? "");
+    return [`- ${who}: ${look} ${outfit} ${doing}`, placement && `  ${placement}`].filter(Boolean).join("\n");
   });
+  return lines.length > 0 && `Characters (each appears exactly once; nobody else may look like them):\n${lines.join("\n")}`;
+}
 
-  const setting = [
+function motionNotes(motion: Motion | undefined, hasVehicles: boolean): string | false {
+  if (!motion || motion.direction === "static") return false;
+  const direction = {
+    "left-to-right": "everything travels from LEFT to RIGHT across the frame (vehicles point right)",
+    "right-to-left": "everything travels from RIGHT to LEFT across the frame (vehicles point left)",
+    "toward-camera": "everything travels TOWARD the camera (we see the fronts)",
+    "away-from-camera": "everything travels AWAY from the camera (we see the rears)",
+  }[motion.direction];
+  return [
+    `Screen direction: ${direction}.${hasVehicles ? " All moving vehicles in this sequence face the same way unless the scene says otherwise." : ""}`,
+    motion.order && `Positions: ${motion.order}. This order must be clearly readable.`,
+    motion.cameraSide && `Camera side: ${motion.cameraSide}.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function settingNotes(context: SceneContext): string {
+  return [
     context.location && `Location: ${context.location}.`,
     [context.period, context.timeOfDay, context.weather].filter(Boolean).length > 0 &&
       `When: ${[context.period, context.timeOfDay, context.weather].filter(Boolean).join(", ")}.`,
@@ -131,17 +170,26 @@ function contextFor(script: ComicScript, context: SceneContext, castRefs: CastRe
     context.activity && `What's happening: ${context.activity}.`,
     context.relationships && `Between them: ${context.relationships}.`,
     context.camera && `Camera: ${context.camera}.`,
-    context.objects.length > 0 && `Important objects: ${context.objects.join(", ")}.`,
+    context.objects.length > 0 && `Props: ${context.objects.join(", ")}.`,
     context.continuity && `Continuity with the previous panel: ${context.continuity}`,
-  ].filter(Boolean);
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
-  const clothes =
-    references.length > 0 &&
-    "Clothes: everyone wears the outfit listed for THIS panel (it fits their age, the place, the occasion, the weather and the era). The outfits on the reference design sheets are only examples and must not be copied.";
-  return {
-    notes: [setting.join(" "), lines.length > 0 && `Characters:\n${lines.join("\n")}`, clothes].filter(Boolean).join("\n\n"),
-    references,
-  };
+function retryNotes(retry: QaRetry | undefined): string | false {
+  return (
+    !!retry &&
+    `IMPORTANT: a previous attempt at this picture failed our continuity check. Fix exactly this: ${retry.fix}${retry.safe ? " Use the simpler composition below: correct storytelling matters more than drama." : ""}`
+  );
+}
+
+/** Objects worth putting on the cover: anything the brief mentions, plus the hero's own. */
+export function coverObjects(scene: string, objectRefs: ObjectRef[]): LedgerObject[] {
+  const text = scene.toLowerCase();
+  return objectRefs
+    .filter((object) => object.role === "hero" || object.name.toLowerCase().split(/[^a-z0-9-]+/).some((word) => word.length > 2 && text.includes(word)))
+    .map((object) => ({ id: object.id, name: object.name }));
 }
 
 /** Where the calm space for the title must be, in words the artist understands. */
@@ -155,27 +203,52 @@ function titleSpace(design: CoverDesign | undefined): string {
   return `Keep ${amount} at the ${band}${side} of the image calm and simple (flat colour, sky, shadow or paper) for the title, which our designers letter on top later.`;
 }
 
-export function coverJob(script: ComicScript, style: ComicStyle, castRefs: CastRef[] = [], revision?: Revision): ArtJob {
+export function coverJob(
+  script: ComicScript,
+  style: ComicStyle,
+  castRefs: CastRef[] = [],
+  revision?: Revision,
+  objectRefs: ObjectRef[] = [],
+  retry?: QaRetry,
+  entry?: LedgerEntry,
+): ArtJob {
   const scene = script.cover?.scene ?? script.pages[0].panels[0].scene;
   const design = script.cover?.design;
-  const cast = castFor(script, scene, castRefs, revision ? 1 : 0);
+  const refs = new References();
+  if (revision) refs.add(revision.currentPath);
+  const objects = objectNotes(coverObjects(scene, objectRefs), objectRefs, refs);
+  const names = [...script.characters.map((c) => c.name), ...castRefs.map((c) => c.name)];
+  const people: LedgerPerson[] = entry?.people ?? castRefs
+    .filter((ref) => mentionsCharacter(scene, ref.name, names))
+    .map((ref) => ({ name: ref.name, stage: "", wardrobe: "clothes that fit the cover concept", wardrobeFromSheet: false }));
+  const cast = peopleNotes(script, undefined, people, castRefs, objectRefs, refs);
   const prompt = [
     revisionNotes(revision),
+    retryNotes(retry),
     "The front cover of a premium comic book, portrait format, by a world-class cover artist and designer: an authored, art-directed image where illustration and graphic design work together.",
     `Art style: ${style.art}`,
     design && `Cover concept: ${design.concept}`,
     `Composition family: ${familyGuidance(design?.approach)}. Commit to it fully; don't fall back to a centred character posing in front of a background.`,
     `Cover brief: ${scene}`,
-    cast.notes,
+    retry?.safe && "Simpler composition: one clear focal subject, neutral eye-level perspective, unobscured silhouettes and no extreme perspective; keep the same story and canon.",
+    objects,
+    objects && "The cover palette applies to the background and lighting, NEVER to the canon objects' own colours.",
+    cast,
     "Craft: one clear idea readable at thumbnail size; a strong silhouette; deliberate negative space; a limited palette with one accent colour; finished, confident rendering where it matters and restraint everywhere else.",
     titleSpace(design),
     NO_TEXT,
   ]
     .filter(Boolean)
     .join("\n\n");
-  return { prompt, size: COVER_SIZE, references: [...(revision ? [revision.currentPath] : []), ...cast.references], label: "cover" };
+  return { prompt, size: COVER_SIZE, references: refs.paths, label: "cover" };
 }
 
+/**
+ * One panel, built from the Continuity Ledger: canon objects with their sheets and locks, people
+ * with their age-correct designs, outfit rules and physical placement, screen direction, and the
+ * previous panel of the same scene as a continuity reference. With `retry`, it carries visual QA's
+ * fix (and, after repeated failures, switches to the panel's simpler safe shot).
+ */
 export function panelJob(
   script: ComicScript,
   pageIndex: number,
@@ -183,20 +256,27 @@ export function panelJob(
   style: ComicStyle,
   castRefs: CastRef[] = [],
   revision?: Revision,
+  options: { objectRefs?: ObjectRef[]; entry?: LedgerEntry; previousPanelPath?: string; retry?: QaRetry } = {},
 ): ArtJob {
+  const { objectRefs = [], entry, previousPanelPath, retry } = options;
   const page = script.pages[pageIndex];
   const panel = page.panels[panelIndex];
   const rect = LAYOUTS[page.layout].panels[panelIndex];
   const aspect = panelAspect(rect);
+  const refs = new References();
+  if (revision) refs.add(revision.currentPath);
+
+  const objects = entry ? objectNotes(entry.objects, objectRefs, refs) : false;
+  const people = entry && panel.context
+    ? peopleNotes(script, panel.context, entry.people, castRefs, objectRefs, refs)
+    : legacyCast(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs, refs);
+  const previousN = previousPanelPath && !revision ? refs.add(previousPanelPath) : null;
+  const hasVehicles = !!entry?.objects.some((object) => objectRefs.find((ref) => ref.id === object.id)?.kind === "vehicle");
 
   const placements = [...new Map(panel.dialogue.map((line) => [line.speaker, line.side])).entries()].map(
     ([speaker, side]) => `${speaker} is on the ${side} side of the frame.`,
   );
   const hasLettering = panel.caption.trim() !== "" || panel.dialogue.length > 0;
-  const offset = revision ? 1 : 0;
-  const cast = panel.context
-    ? contextFor(script, panel.context, castRefs, offset)
-    : castFor(script, `${panel.scene} ${panel.dialogue.map((line) => line.speaker).join(" ")}`, castRefs, offset);
 
   // Neighbouring panels, so each picture (and every redraw) flows with the story around it.
   const flat = script.pages.flatMap((pg) => pg.panels);
@@ -206,18 +286,27 @@ export function panelJob(
     flat[at + 1] && `Next panel will show: ${flat[at + 1].scene.slice(0, 240)}`,
   ].filter(Boolean);
 
+  const safe = !!retry?.safe && !!panel.safeShot;
   const hero =
     panel.hero &&
-    `HERO PANEL: this is one of the one or two moments in the whole book that readers will remember${panel.heroReason ? ` (${panel.heroReason})` : ""}. Make it a jaw-dropping, authored image, not a routine panel: ${style.direction.hero} Push the camera further than any other panel, give it a bold foreground shape and a clear focal point, and render the environment and light with splash-page ambition.`;
+    !safe &&
+    `HERO PANEL: this is one of the one or two moments in the whole book that readers will remember${panel.heroReason ? ` (${panel.heroReason})` : ""}. Make it a jaw-dropping, authored image, not a routine panel: ${style.direction.hero} Push the camera further than any other panel, give it a bold foreground shape and a clear focal point, and render the environment and light with splash-page ambition. Ambition never overrides correctness: identities, canon objects, direction and physics must still be exactly right.`;
   const prompt = [
     revisionNotes(revision),
+    retryNotes(retry),
     `A single comic book panel illustration: ${describeShape(aspect)}.`,
     frameNote(rect),
     `Art style: ${style.art}`,
     hero,
-    `Shot: ${panel.shot}.`,
-    `Scene: ${panel.scene}`,
-    cast.notes,
+    `Shot: ${safe ? "clear, readable framing" : panel.shot}.`,
+    safe ? `Scene (simplified for clarity): ${panel.safeShot}` : `Scene: ${panel.scene}`,
+    panel.context && settingNotes(safe ? { ...panel.context, camera: "" } : panel.context),
+    objects,
+    people,
+    motionNotes(entry?.motion, hasVehicles),
+    hasVehicles &&
+      "Physics: vehicles sit on the road with all wheels on the ground (unless the scene says otherwise), roads, lanes and junctions are physically plausible, and the only vehicles are the ones named here plus clearly secondary background traffic. No duplicate of any named vehicle or person.",
+    previousN && `Reference image ${previousN} is the previous panel of this same scene: keep the setting, lighting, colours, vehicles and everyone's clothes consistent with it, but draw the NEW moment and camera described here (don't copy its composition).`,
     placements.length > 0 && `Composition: ${placements.join(" ")}`,
     neighbours.length > 0 && `Story flow (for continuity only, don't draw these): ${neighbours.join(" ")}`,
     hasLettering &&
@@ -229,11 +318,29 @@ export function panelJob(
 
   return {
     prompt,
-    size: panel.hero ? imageSizeForAspect(aspect, HERO_PIXELS) : imageSizeForAspect(aspect),
-    references: [...(revision ? [revision.currentPath] : []), ...cast.references],
-    quality: panel.hero ? heroQuality() : undefined,
-    label: `panel ${pageIndex + 1}-${panelIndex + 1}${panel.hero ? " ★" : ""}`,
+    size: panel.hero && !safe ? imageSizeForAspect(aspect, HERO_PIXELS) : imageSizeForAspect(aspect),
+    references: refs.paths,
+    quality: panel.hero && !safe ? heroQuality() : undefined,
+    label: `panel ${pageIndex + 1}-${panelIndex + 1}${panel.hero ? " ★" : ""}${retry ? " (retry)" : ""}`,
   };
+}
+
+/** Panels written before scene context existed: characters found by name in the text. */
+function legacyCast(script: ComicScript, text: string, castRefs: CastRef[], refs: References): string | false {
+  const names = [...script.characters.map((c) => c.name), ...castRefs.map((c) => c.name)];
+  const priority = { main: 0, supporting: 1, minor: 2 };
+  const designed = castRefs
+    .filter((ref) => mentionsCharacter(text, ref.name, names))
+    .sort((a, b) => priority[a.importance ?? "supporting"] - priority[b.importance ?? "supporting"]);
+  const others = script.characters.filter((character) => mentionsCharacter(text, character.name, names) && !designed.some((ref) => ref.name === character.name));
+  const lines = [
+    ...designed.map((ref) => {
+      const n = refs.add(ref.designPath);
+      return n ? `- ${ref.name}: reference image ${n} is their character design. Draw them exactly like it (face, hair, build, distinctive features). ${ref.description}` : `- ${ref.name}: ${ref.description}`;
+    }),
+    ...others.map((character) => `- ${character.name}: ${character.appearance}`),
+  ];
+  return lines.length > 0 && `Characters (keep their appearance exactly as described):\n${lines.join("\n")}`;
 }
 
 /** OpenAI client for images: gives up on a hung request after 5 minutes instead of waiting indefinitely. */
