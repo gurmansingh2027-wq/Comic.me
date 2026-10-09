@@ -74,7 +74,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
     const facts = panel ? panelFacts(panel, entry, comic.objects ?? []) + neighbours : `Cover intent: ${coverScene}\nTitle: ${script.title}\n${panelFacts({ shot: "wide", scene: coverScene, caption: "", dialogue: [] }, entry, comic.objects ?? [])}`;
     const existing = await deps.loadImage(id, key);
     let done = false;
-    comic = await update(id, latest => {
+    comic = await update(id, async latest => {
       latest.qa ??= { pictures: {} };
       const old = latest.qa.pictures[key];
       if (!options.redraw && !options.repair && existing && (!latest.qa.version || old?.accepted?.revision === revision)) { done = true; return; }
@@ -83,7 +83,15 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
         if (options.restart && (!options.requestId || old?.status !== "blocked")) throw new UserFacingError("Resume the existing attempt first.", 409);
         if (options.redraw && latest.qa.version && options.expectedDigest !== (old?.accepted?.digest ?? (existing ? digest(existing) : undefined))) throw new UserFacingError("This picture changed. Refresh before redrawing.", 409);
         latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], at: new Date().toISOString(), requestId: options.requestId, accepted: old?.accepted };
-      } else if (!old) latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], at: new Date().toISOString() };
+      } else if (!old) {
+        latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], at: new Date().toISOString() };
+        // A picture drawn before checks existed is inspected first and only redrawn if it fails.
+        if (existing && latest.qa.version) {
+          const file = `${randomUUID()}.webp`;
+          await deps.saveQaFile(id, file, existing);
+          latest.qa.pictures[key].candidate = file;
+        }
+      }
       else if (old.revision !== revision) throw new UserFacingError("The drawing plan changed. Review it before retrying.", 409);
       else if ((options.redraw || options.restart) && old.status === "accepted") done = true;
       // An automatic fix from the page checks gets its own attempts (the first drawing may have used
@@ -109,7 +117,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
           const attempt = record.attempts + 1;
           const simplified = attempt === limit;
           await writeRecord({ attempts: attempt, status: "generating", simplified, escalated: false });
-          const retry = attempt > 1 || options.repair ? { fix: record.notes || options.repair || "Preserve all canon details and the story beat.", safe: simplified } : undefined;
+          const retry = attempt > 1 || options.repair || record.findings.length ? { fix: record.notes || options.repair || "Preserve all canon details and the story beat.", safe: simplified } : undefined;
           const revisionInput = options.redraw && existing ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
           const job = key === "cover" ? coverJob(script, style, castRefs, revisionInput, objectRefs, retry, entry) : panelJob(script, p, i, style, castRefs, revisionInput, { objectRefs, entry, previousPanelPath: previousPath, retry });
           candidate = await billed(id, options.redraw || attempt > 1 || options.repair ? "redraw" : "picture", `${key} attempt ${attempt}${simplified ? " safe composition" : ""}`, () => deps.drawImage(job));

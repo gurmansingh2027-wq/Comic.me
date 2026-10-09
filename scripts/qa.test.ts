@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDrawingService } from "../src/lib/drawing-service";
 import { artRevision, comicRevision, exportReady, pageRevision } from "../src/lib/qa/state";
-import { decide, sequenceBlockers, type PanelVerdict, type SequenceVerdict } from "../src/lib/qa/visual-qa";
+import { decide, PanelVerdictSchema, sequenceBlockers, type PanelVerdict, type SequenceVerdict } from "../src/lib/qa/visual-qa";
 import type { Comic } from "../src/lib/comic";
 import { recordUsage } from "../src/lib/meter";
 
@@ -119,4 +119,17 @@ test("page checks only block on concrete hard findings for pictures on the page"
   assert.deepEqual(sequenceBlockers(verdict([{ key: "1-1", failure: "UNPLANNED_ELEMENT", what: "extra", fix: "" }], "low"), ["1-1"]), []);
   assert.equal(sequenceBlockers(verdict([{ key: "1-1", failure: "WARDROBE_UNINTENDED_CHANGE", what: "red shirt", fix: "blue" }]), ["1-1"]).length, 1);
   assert.deepEqual(sequenceBlockers(verdict([{ key: "9-9", failure: "WARDROBE_UNINTENDED_CHANGE", what: "red shirt", fix: "blue" }]), ["1-1"]), []);
+});
+test("a picture drawn before checks existed is inspected first and only redrawn if it fails", async () => {
+  const h = harness([pass, fail, pass]);
+  h.images.set("1-1", Buffer.from("legacy-1")); h.images.set("1-2", Buffer.from("legacy-2"));
+  await h.service.draw(h.comic.id, "1-1");
+  assert.equal(h.prompts.length, 0); assert.equal(h.images.get("1-1")?.toString(), "legacy-1");
+  await h.service.draw(h.comic.id, "1-2");
+  assert.equal(h.prompts.length, 1); assert.match(h.prompts[0], /white car/);
+  assert.equal(h.comic.qa!.pictures["1-2"].status, "accepted");
+});
+test("an unknown label from the inspector falls back safely instead of failing the inspection", () => {
+  const verdict = PanelVerdictSchema.parse({ checks: [{ dimension: "VEHICLE_LIVERY", status: "fail", note: "" }], failures: [{ failure: "WRONG_CAR_COLOUR", what: "orange" }], confidence: "very high", fix: "paint it white" });
+  assert.equal(verdict.checks[0].dimension, "STYLE"); assert.equal(verdict.failures[0].failure, "SCENE_MISMATCH"); assert.equal(verdict.confidence, "medium");
 });
