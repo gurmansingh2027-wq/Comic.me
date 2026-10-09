@@ -14,7 +14,10 @@ import type { ComicStyle } from "../styles";
 //      relationship, their age, the scene, the tone and the style's dialogue direction (less text,
 //      more subtext), and offers alternative titles.
 
-const DialogueSchema = z.object({
+// Claude compiles the output schema into a grammar with a hard size limit ("The compiled grammar is
+// too large"). This schema sits close to it: before adding a field, run .context/probe-grammar.ts or
+// fold the information into an existing field (as hero, inside and voice do).
+export const DialogueSchema = z.object({
   speaker: z.string().describe("Character name, exactly as in the character list"),
   side: z.enum(["left", "right"]).describe("Which side of the panel the speaker stands on"),
   kind: z
@@ -23,13 +26,13 @@ const DialogueSchema = z.object({
   text: z.string().describe("Balloon text, usually under 12 words, at most 20. Wrap one or two stressed words in *asterisks* for emphasis, sparingly."),
 });
 
-const LetteringSchema = z.object({
+export const LetteringSchema = z.object({
   caption: z.string().describe("Narrator caption, at most 25 words. Empty string if none."),
   dialogue: z.array(DialogueSchema).describe("0 to 3 balloons, in reading order"),
   sfx: z.string().describe('A sound effect lettered over the art, e.g. "KRAK!", "VROOM", "tik… tik…". Empty string for most panels.'),
 });
 
-const ContextSchema = z.object({
+export const ContextSchema = z.object({
   location: z.string().describe("Specific place; reuse the exact same wording for every panel in the same place"),
   period: z.string().describe('Year or era, e.g. "2016", "summer 1958", "college years"'),
   timeOfDay: z.string(),
@@ -46,8 +49,7 @@ const ContextSchema = z.object({
         wardrobe: z.string().describe("What they wear in THIS scene, fitting age, era, place, activity, event, weather and culture"),
         emotion: z.string(),
         action: z.string().describe("What they are doing / their pose"),
-        insideObject: z.string().describe('Id of the canon object they are in or on (e.g. the car they drive); empty if none'),
-        insidePosition: z.string().describe('Where in it, e.g. "driver\'s seat", "passenger seat", "leaning out of the driver\'s window"; empty if none'),
+        inside: z.string().describe('If they are in or on a canon object: "<object id>: <where>", e.g. "huracan: driver\'s seat", "gt-r: leaning out of the passenger window"; empty if none'),
         lookChange: z.string().describe('Only for look_policy "ask": a big look change this scene needs (e.g. "red wedding lehenga"); empty otherwise'),
       }),
     )
@@ -69,14 +71,11 @@ const ContextSchema = z.object({
   continuity: z.string().describe("What must match the previous panel (same clothes in the same scene, props in hand, mess, light); empty if a new scene"),
 });
 
-const ScriptSchema = z.object({
+export const ScriptSchema = z.object({
   bible: z.object({
     logline: z.string().describe("One sentence: whose story this is and what it's really about"),
     tone: z.string(),
     arc: z.string().describe("The emotional journey from first page to last, in 2-3 sentences"),
-    voices: z
-      .array(z.object({ name: z.string(), voice: z.string().describe("How this person talks: rhythm, words, humour") }))
-      .describe("Every speaking character"),
   }),
   title: z.string().describe("Short, evocative comic title (max 6 words)"),
   tagline: z.string().describe("Cover tagline, max 10 words"),
@@ -88,6 +87,7 @@ const ScriptSchema = z.object({
         .describe(
           "Who they are visually (face, skin, hair, build, distinctive markers). NOT clothing: clothes are chosen per scene.",
         ),
+      voice: z.string().describe("How this person talks: rhythm, words, humour. Empty if they never speak."),
     }),
   ),
   cover: z.object({
@@ -107,15 +107,14 @@ const ScriptSchema = z.object({
           context: ContextSchema,
           complexity: z.enum(COMPLEXITIES).describe("How hard this is to draw correctly: several vehicles + visible drivers + extreme perspective + smoke/crowds = high or very_high"),
           safeShot: z.string().describe("A simpler composition of the SAME beat that is easy to draw correctly (used if the ambitious one fails)"),
-          hero: z.boolean().describe("True for the book's 1-2 jaw-dropping hero panels only"),
-          heroReason: z.string().describe('For hero panels, the narrative reason (e.g. "the reveal", "biggest joke"); otherwise empty'),
+          hero: z.string().describe('Empty for almost every panel. Only for the book\'s 1-2 jaw-dropping hero panels: the narrative reason (e.g. "the reveal", "biggest joke")'),
         }),
       ),
     }),
   ),
 });
 
-const EditSchema = z.object({
+export const EditSchema = z.object({
   title: z.string(),
   titleAlternatives: z.array(z.string()).describe("2-3 other strong titles for this comic, different in angle (max 6 words each)"),
   tagline: z.string(),
@@ -136,7 +135,7 @@ ${layoutMenu()}
    - Use "splash" for at most 2 of the very biggest moments. Vary layouts; don't repeat one layout on consecutive pages.
    - End pages on a hook or turn so the reader wants to turn the page. Give the final page a satisfying ending.
    - The number of panels on a page must exactly match its layout.
-5. **Hero panels.** Pick the book's 1-2 jaw-dropping moments (3 at most for 10+ pages) and set hero: true with a heroReason. Choose them for narrative weight: a transformation, reveal, victory, defeat, first kiss, dramatic entrance, emotional peak, discovery, action climax, the biggest joke, a reunion or a major decision. Never pick a panel just because it comes first. Give each hero panel a big frame (a splash, or the big panel of its layout), an ambitious camera and a richly described scene: these are where the reader should stop and stare.
+5. **Hero panels.** Pick the book's 1-2 jaw-dropping moments (3 at most for 10+ pages) and put the narrative reason in hero (leave hero empty for every other panel). Choose them for narrative weight: a transformation, reveal, victory, defeat, first kiss, dramatic entrance, emotional peak, discovery, action climax, the biggest joke, a reunion or a major decision. Never pick a panel just because it comes first. Give each hero panel a big frame (a splash, or the big panel of its layout), an ambitious camera and a richly described scene: these are where the reader should stop and stare.
 6. **Panels.** For each panel: a shot, a vivid scene description, its scene context, and the caption and balloons.
 
 ## Scene context (filled in for every panel)
@@ -148,7 +147,7 @@ ${layoutMenu()}
 
 ## Continuity (each panel is drawn separately, so spell out the state)
 - **Object Bible.** Recurring important things (the hero's car, a rival's car, an heirloom) have ids, descriptions and LOCKED attributes. Whenever one is visible, even tiny, in the background or in a mirror, list it in canon. Describe it consistently with its locks and never contradict them; a state change (damage) only if the story causes it, using a defined state.
-- **Occupants.** Anyone in or on a vehicle gets insideObject and insidePosition, and must be listed in cast even if only a silhouette is visible. A vehicle's owner drives it unless the story says otherwise. Respect the driver side.
+- **Occupants.** Anyone in or on a vehicle gets inside ("<object id>: <where>", e.g. "huracan: driver's seat"), and must be listed in cast even if only a silhouette is visible. A vehicle's owner drives it unless the story says otherwise. Respect the driver side.
 - **Action sequences.** Plan the spatial progression of an action sequence before writing its panels (approach → side by side → overtakes → exits ahead). Give its panels the same sequence id. motion.direction is the travel direction across the frame: keep it constant within a sequence (180-degree rule) unless axisChange is true and the scene shows why. motion.order says exactly who is ahead, behind, left and right; it must follow the story (if he's a nose ahead, he's a nose ahead).
 - **No accidental extras.** Each named character appears at most once per panel. No extra vehicles or people in action scenes beyond those the story has.
 - **Complexity.** Rate every panel. Several vehicles + visible drivers + extreme perspective + smoke, crowds or reflections is high or very_high. Keep very_high for hero panels; otherwise prefer the composition that keeps the beat readable. Always write a safeShot: the same beat as a simple, clear composition (e.g. a clean rear three-quarter view of both cars with obvious road geometry and drivers not exposed).
@@ -158,7 +157,7 @@ ${layoutMenu()}
 - Write for a reader who doesn't know these people. Every page must make sense on its own and in sequence.
 - Captions establish context: when and where we are, what changed, time jumps ("Two years later, Toronto."), and why the moment matters.
 - Dialogue never narrates what the picture already shows. Not "We have arrived at college." Not "I am surprised." Characters talk the way real people do: with personality, humour, subtext, conflict and their relationship in every line.
-- Each person sounds like themselves (see the voices in the bible): a child sounds like a child, a stern father like a stern father. They must not all sound like the same narrator.
+- Each person sounds like themselves (see each character's voice): a child sounds like a child, a stern father like a stern father. They must not all sound like the same narrator.
 - Make lines specific to this story, not generic: not "You did it!" but "You actually got the Toronto job!"
 - Introduce each person by name early, in a caption or dialogue.
 - Less is more: great comics use few words. Captions at most 25 words, balloons usually under 12 words (never over 20), at most 3 balloons per panel. Let some panels be silent.
@@ -241,8 +240,8 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
         ...panel,
         dialogue: panel.dialogue.slice(0, 3),
         sfx: panel.sfx.trim() || undefined,
-        hero: panel.hero || undefined,
-        heroReason: panel.hero ? panel.heroReason : undefined,
+        hero: panel.hero.trim() ? true : undefined,
+        heroReason: panel.hero.trim() || undefined,
         complexity: panel.complexity,
         safeShot: panel.safeShot.trim() || undefined,
         context: {
@@ -252,10 +251,10 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
   axisChange: panel.context.axisChange || undefined,
           canon: panel.context.canon.map((object) => ({ id: object.id, state: object.state.trim() || undefined, position: object.position.trim() || undefined })),
           // "main" means the character's main age; stored as "".
-          cast: panel.context.cast.map(({ insideObject, insidePosition, lookChange, ...person }) => ({
+          cast: panel.context.cast.map(({ inside, lookChange, ...person }) => ({
             ...person,
             stage: person.stage === "main" ? "" : person.stage,
-            inside: insideObject.trim() ? { objectId: insideObject.trim(), position: insidePosition.trim() } : undefined,
+            inside: parseInside(inside),
             lookChange: lookChange.trim() || undefined,
           })),
         },
@@ -277,14 +276,22 @@ export async function writeScript(story: string, style: ComicStyle, cast?: CastM
   return {
     title: draft.title,
     tagline: draft.tagline,
-    bible: draft.bible,
-    characters: cast === undefined ? draft.characters : [
+    bible: { ...draft.bible, voices: draft.characters.filter((character) => character.voice.trim()).map(({ name, voice }) => ({ name, voice })) },
+    characters: cast === undefined ? draft.characters.map(({ name, appearance }) => ({ name, appearance })) : [
       ...cast.map((member) => ({ name: member.name, appearance: identityOnly(member.description) })),
-      ...draft.characters.filter((character) => !cast.some((member) => member.name.normalize("NFKC").toLowerCase() === character.name.normalize("NFKC").toLowerCase())),
+      ...draft.characters.filter((character) => !cast.some((member) => member.name.normalize("NFKC").toLowerCase() === character.name.normalize("NFKC").toLowerCase())).map(({ name, appearance }) => ({ name, appearance })),
     ],
     cover: draft.cover,
     pages,
   };
+}
+
+/** "huracan: driver's seat" → { objectId: "huracan", position: "driver's seat" }. */
+function parseInside(value: string): { objectId: string; position: string } | undefined {
+  const text = value.trim();
+  if (!text) return undefined;
+  const [objectId, ...rest] = text.split(/\s*[:|]\s*/);
+  return { objectId: objectId.trim(), position: rest.join(": ").trim() };
 }
 
 /** Pass 2: the editor. Only captions, balloons, title and tagline change; the art plan stays the same. */
