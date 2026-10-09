@@ -6,6 +6,7 @@ import type { CanonObject, Complexity, ComicScript, Panel } from "../comic";
 import type { LedgerEntry } from "../continuity";
 import type { ComicStyle } from "../styles";
 import { driverSideNote } from "../engines/art";
+import { physicsFacts } from "../vehicle-physics";
 import { FAILURE_CLASS_IDS, FAILURE_CLASSES, failureGuide, isHard, type FailureClass } from "./failure-classes";
 
 // Visual QA: a multimodal inspector that looks at a generated picture BEFORE it's accepted,
@@ -62,6 +63,7 @@ Compare the generated picture against the storyboard intent, the Continuity Ledg
 - Soft (note, don't fail): small background differences, lighting variation, unimportant passers-by, texture changes, tiny details you can't make out. Camera framing may vary if the same action and story beat remain clear. A wider view of the same action is NOT SCENE_MISMATCH; reserve that hard class for a different or missing narrative event. Simplified compositions intentionally change framing.
 - Night lighting may darken a colour but must not change its hue: a white car can look blue-grey in shadow, never yellow, orange, green or black under even light.
 - People in vehicles: a driver's chest and shoulders face the way the vehicle points, even when leaning out of a window (only the head may turn). Leaning out of a window means still seated with head, shoulder and forearm through the open side window; sitting on the sill, climbing out or rising above the roofline is IMPOSSIBLE_POSE unless the storyboard says they climb out. A torso facing the vehicle's rear, or a driver turned round facing the rear window, is IMPOSSIBLE_POSE; a driver on the wrong side of a vehicle with a locked driver side is DRIVER_SIDE_INCONSISTENCY. Work out which way the car points from its lights (headlights at the front, tail lights at the rear) before judging.
+- Vehicle physics: check the Physics state in the facts. A moving vehicle's driver faces the direction of travel, both hands on the wheel, torso inside; a body outside a window, a driver turned backward or hands off the wheel at speed is IMPOSSIBLE_POSE. Tyre smoke, exhaust flames and motion blur trail behind a moving vehicle; trailing the wrong way is WRONG_SCREEN_DIRECTION. Two steering wheels or a door mirror on the wrong side is VEHICLE_GEOMETRY_FAILURE. A person far too big or small for the car (a seated driver's head above the roofline, a standing adult not about 1.3 to 1.5 times a sports car's height) is SCALE_FAILURE.
 - Fixed scenery shared with the previous panel of the same scene (traffic lights, poles, kerbs, buildings) stays on the same side of the road. If the camera hasn't clearly moved to the other side and a traffic light or kerb swaps sides, that is ACTION_GEOGRAPHY_FAILURE.
 - Only judge what is visible. Don't fail a livery that's on the side we can't see; do fail one that should be visible and isn't.
 - Confidence is about your verdict on what is VISIBLE. If you examined everything visible and found nothing wrong, that is high confidence: never lower it because something is hidden, off-frame, stylised or small. Use medium when a required detail is genuinely ambiguous at this size, and low only when the image is too unclear to judge at all.
@@ -78,7 +80,7 @@ export async function qaImage(data: Buffer, maxSide = 640): Promise<Buffer> {
 export type QaReference = { label: string; data: Buffer };
 
 /** Facts for one panel, as plain text the inspector can check against. */
-export function panelFacts(panel: Panel, entry: LedgerEntry | undefined, objects: CanonObject[]): string {
+export function panelFacts(panel: Panel, entry: LedgerEntry | undefined, objects: CanonObject[], entries: LedgerEntry[] = []): string {
   const lines = [
     `Storyboard beat: ${panel.scene}`,
     panel.context && `Where/when: ${[panel.context.location, panel.context.period, panel.context.timeOfDay, panel.context.weather].filter(Boolean).join(", ")}`,
@@ -96,6 +98,7 @@ export function panelFacts(panel: Panel, entry: LedgerEntry | undefined, objects
           .join(" | ")}`
       : "",
     panel.context?.continuity && `Continuity: ${panel.context.continuity}`,
+    physicsFacts(panel, entry, entries),
     entry?.motion && entry.motion.direction !== "static" && `Motion: travel ${entry.motion.direction}${entry.motion.order ? `; order: ${entry.motion.order}` : ""}${entry.motion.cameraSide ? `; camera: ${entry.motion.cameraSide}` : ""}`,
   ];
   return lines.filter(Boolean).join("\n");
@@ -246,7 +249,7 @@ export function sequenceFacts(script: ComicScript, entries: LedgerEntry[], objec
       const [p, i] = key.split("-").map((n) => Number(n) - 1);
       const panel = script.pages[p]?.panels[i];
       if (!panel) return null;
-      return `[${key}] ${panelFacts(panel, entry, objects).replace(/\n/g, " | ")}`;
+      return `[${key}] ${panelFacts(panel, entry, objects, entries).replace(/\n/g, " | ")}`;
     })
     .filter(Boolean)
     .join("\n");
