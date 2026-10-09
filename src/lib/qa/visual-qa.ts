@@ -30,17 +30,26 @@ export const DIMENSIONS = [
   "STYLE",
 ] as const;
 
+/**
+ * The SDK sends enums to Claude as hints, not grammar, so an answer can contain a label that isn't
+ * on the list. One unknown label must not throw away the whole inspection: it falls back to a safe
+ * value (unknown failures count as a hard SCENE_MISMATCH, so nothing wrong slips through). The JSON
+ * schema Claude sees is unchanged.
+ */
+const lenient = <const T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) =>
+  z.preprocess((value) => ((values as readonly unknown[]).includes(value) ? value : fallback), z.enum(values));
+
 const FindingSchema = z.object({
-  failure: z.enum(FAILURE_CLASS_IDS),
+  failure: lenient(FAILURE_CLASS_IDS, "SCENE_MISMATCH"),
   what: z.string().describe("Exactly what is wrong, in one sentence (which person/vehicle, what you see vs what's required)"),
 });
 
 export const PanelVerdictSchema = z.object({
   checks: z
-    .array(z.object({ dimension: z.enum(DIMENSIONS), status: z.enum(["pass", "minor", "fail", "n/a"]), note: z.string() }))
+    .array(z.object({ dimension: lenient(DIMENSIONS, "STYLE"), status: lenient(["pass", "minor", "fail", "n/a"], "minor"), note: z.string() }))
     .describe("One entry per relevant dimension"),
   failures: z.array(FindingSchema).describe("Every failure you are confident about; empty if the picture is correct"),
-  confidence: z.enum(["high", "medium", "low"]).describe("How sure you are of this verdict overall"),
+  confidence: lenient(["high", "medium", "low"], "medium").describe("How sure you are of this verdict overall"),
   fix: z.string().describe("If anything failed: precise instructions for the redraw (what to change, what must stay). Empty if nothing failed."),
 });
 export type PanelVerdict = z.infer<typeof PanelVerdictSchema>;
@@ -122,7 +131,7 @@ export async function checkPanel({
       : []),
     { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}\n\nCheck image 1.` },
   ];
-  return askClaude({ system: QA_PROMPT, user: blocks, schema: PanelVerdictSchema, effort, operation: `visual-qa-${effort}`, maxTokens: 4000 });
+  return askClaude({ system: QA_PROMPT, user: blocks, schema: PanelVerdictSchema, effort, operation: `visual-qa-${effort}`, maxTokens: 16000 });
 }
 
 export type Decision = "accept" | "retry" | "simplify" | "escalate" | "flag";
@@ -162,10 +171,10 @@ export function decide({ verdict, attempt, complexity, hasSafeShot, escalated }:
 
 export const SequenceSchema = z.object({
   findings: z
-    .array(z.object({ key: z.string().describe('Picture key, e.g. "3-2" or "cover"'), failure: z.enum(FAILURE_CLASS_IDS), what: z.string(), fix: z.string() }))
+    .array(z.object({ key: z.string().describe('Picture key, e.g. "3-2" or "cover"'), failure: lenient(FAILURE_CLASS_IDS, "SCENE_MISMATCH"), what: z.string(), fix: z.string() }))
     .describe("Problems you are confident about, each tied to the picture that should be redrawn"),
   notes: z.string().describe("One line summary"),
-  confidence: z.enum(["high", "medium", "low"]),
+  confidence: lenient(["high", "medium", "low"], "medium"),
 });
 export type SequenceVerdict = z.infer<typeof SequenceSchema>;
 
@@ -209,7 +218,7 @@ export async function checkSequence({
     ).flat(),
     { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}` },
   ];
-  return askClaude({ system: SEQUENCE_PROMPT, user: blocks, schema: SequenceSchema, effort, operation: `sequence-qa-${effort}`, maxTokens: 4000 });
+  return askClaude({ system: SEQUENCE_PROMPT, user: blocks, schema: SequenceSchema, effort, operation: `sequence-qa-${effort}`, maxTokens: 16000 });
 }
 
 /** A labelled contact sheet of pictures (for the whole-comic pass): one image instead of forty. */
