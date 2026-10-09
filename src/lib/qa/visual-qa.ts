@@ -35,7 +35,7 @@ const FindingSchema = z.object({
   what: z.string().describe("Exactly what is wrong, in one sentence (which person/vehicle, what you see vs what's required)"),
 });
 
-const PanelVerdictSchema = z.object({
+export const PanelVerdictSchema = z.object({
   checks: z
     .array(z.object({ dimension: z.enum(DIMENSIONS), status: z.enum(["pass", "minor", "fail", "n/a"]), note: z.string() }))
     .describe("One entry per relevant dimension"),
@@ -154,7 +154,7 @@ export function decide({ verdict, attempt, complexity, hasSafeShot, escalated }:
 
 // --- Page and whole-comic passes ------------------------------------------------------------------
 
-const SequenceSchema = z.object({
+export const SequenceSchema = z.object({
   findings: z
     .array(z.object({ key: z.string().describe('Picture key, e.g. "3-2" or "cover"'), failure: z.enum(FAILURE_CLASS_IDS), what: z.string(), fix: z.string() }))
     .describe("Problems you are confident about, each tied to the picture that should be redrawn"),

@@ -73,11 +73,17 @@ export async function runWriting(id: string): Promise<void> {
     );
     const polished = edit.result;
     // The cover gets its own art director pass, built around this story's theme.
+    // One retry covers dropped connections mid-stream (the SDK only retries before the stream starts).
     const coverPass = await metered(() =>
-      designCover(polished, story, style, cast, preset).catch((error) => {
-        console.error("Cover design failed, keeping the writer's cover:", error);
-        return polished.cover;
-      }),
+      designCover(polished, story, style, cast, preset)
+        .catch((error) => {
+          console.error("Cover design failed, trying once more:", error);
+          return designCover(polished, story, style, cast, preset);
+        })
+        .catch((error) => {
+          console.error("Cover design failed, keeping the writer's cover:", error);
+          return polished.cover;
+        }),
     );
     const cover = coverPass.result;
     const script = { ...polished, cover };

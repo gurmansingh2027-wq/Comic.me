@@ -55,6 +55,11 @@ export function friendlyError(error: unknown): { message: string; status: number
       status: 400,
     };
   }
+  // A rejected request is a bug in how we call Claude (e.g. an output format that grew past its
+  // grammar limit), never a transient hiccup: say so, so nobody keeps pressing "Try again".
+  if (error instanceof Anthropic.BadRequestError) {
+    return { message: `This isn't your story: our request to Claude was rejected (${error.message.replace(/^\d+\s*/, "").slice(0, 200)}). Retrying won't help; this needs a code fix.`, status: 500 };
+  }
   if (error instanceof Anthropic.APIError || error instanceof OpenAI.APIError) {
     return { message: "The AI service had a hiccup. Please try again.", status: 502 };
   }
