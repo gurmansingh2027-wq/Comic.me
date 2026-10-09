@@ -147,20 +147,26 @@ export async function checkFinal(id: string, revision: string) {
       // Whole-book audit in readable page batches. Each batch sees the complete plan and canon,
       // plus earlier appearances of recurring identities instead of tiny whole-book thumbnails.
       const overview = factsFor(comic, keys);
+      const { entries } = ledgerFor(comic);
+      const firstKeys = new Set<string>();
+      for (const object of comic.objects ?? []) { const first = entries.find(e => e.objects.some(o => o.id === object.id)); if (first) firstKeys.add(first.key); }
+      for (const person of comic.cast ?? []) { const first = entries.find(e => e.people.some(p => p.name === person.name)); if (first) firstKeys.add(first.key); }
       for (let i = 0; i < pages.length; i += 2) {
         const batch = pages.slice(i, i + 2);
+        // A batch that passed is only read again when its pages or the earlier appearances it is compared with change.
+        const batchRevision = `${batch.map(page => pageRevision(comic, page)).join(":")}:${digestPair(comic, [...firstKeys])}`;
+        const cached = comic.qa?.sequences?.[`book/${batch.join("/")}`];
+        if (cached?.revision === batchRevision && cached.status === "accepted") continue;
         const images = await Promise.all(batch.map(async page => ({ key: page, data: await loadQaFile(id, comic.qa!.pages![page].file!) })));
         if (images.some(image => !image.data)) throw new UserFacingError("A checked page is missing. Check pages again.", 409);
         const batchKeys = keys.filter(key => key === "cover" ? batch.includes("cover") : batch.includes(key.split("-")[0]));
         const refs: QaReference[] = await referencesFor(comic, batchKeys);
         for (const image of images.slice(1)) refs.push({ label: `Lettered page ${image.key}`, data: image.data! });
-        const { entries } = ledgerFor(comic);
-        const firstKeys = new Set<string>();
-        for (const object of comic.objects ?? []) { const first = entries.find(e => e.objects.some(o => o.id === object.id)); if (first) firstKeys.add(first.key); }
-        for (const person of comic.cast ?? []) { const first = entries.find(e => e.people.some(p => p.name === person.name)); if (first) firstKeys.add(first.key); }
         for (const key of firstKeys) { const data = await loadImage(id, key); if (data) refs.push({ label: `Earlier established appearance in ${key}: ${factsFor(comic, [key])}`, data }); }
         const verdict = await inspect(comic, { pageImage: images[0].data!, label: `Final book audit: page ${batch[0]}. Additional pages ${batch.slice(1).join(", ") || "none"}. Report picture keys, not page numbers.`, facts: `Complete storyboard and ledger:\n${overview}\nInspect these pictures: ${batchKeys.join(", ")}`, style: getStyle(comic.styleId)!, references: refs });
-        findings.push(...verdict.findings); blockers.push(...sequenceBlockers(verdict, keys));
+        const batchBlockers = sequenceBlockers(verdict, keys);
+        findings.push(...verdict.findings); blockers.push(...batchBlockers);
+        await saveCheck(id, revision, latest => { latest.qa!.sequences ??= {}; latest.qa!.sequences[`book/${batch.join("/")}`] = { revision: batchRevision, status: batchBlockers.length ? "blocked" : "accepted", findings: verdict.findings, at: new Date().toISOString() }; });
       }
       const pagesOpen = pages.flatMap(page => comic.qa!.pages![page].open ?? []);
       await saveCheck(id, revision, latest => { latest.qa!.final = { revision, status: blockers.length ? "blocked" : "accepted", findings, open: pagesOpen, at: new Date().toISOString() }; });

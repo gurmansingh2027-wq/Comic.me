@@ -73,6 +73,8 @@ function ComicDrawing({
   const [checking, setChecking] = useState(false);
   const [qaError, setQaError] = useState<string | null>(null);
   const [qaProgress, setQaProgress] = useState("");
+  // Panels the server is redrawing right now (fixes from the checks), polled while checking.
+  const [fixing, setFixing] = useState<string[]>([]);
   // Set when the reader chooses to download even though the checks couldn't finish.
   const [downloadAnyway, setDownloadAnyway] = useState(false);
   const checkingRef = useRef(false);
@@ -258,6 +260,14 @@ function ComicDrawing({
     } catch (error) { setQaError(`${(error as Error).message} Check again, or download it as it is.`); }
     finally { checkingRef.current = false; setChecking(false); setQaProgress(""); }
   }
+  useEffect(() => {
+    if (!checking) { setFixing([]); return; }
+    const timer = setInterval(async () => {
+      const current: QaStatus | null = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json()).catch(() => null);
+      if (current) setFixing(keys.filter(key => ["generating", "checking"].includes(current.pictures[key]?.status)));
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [checking, comicId, keys]);
   const checkVersion = JSON.stringify([script, versions]);
   useEffect(() => {
     if (!allReady || saveState !== "saved" || checkingRef.current || qaAttempt.current === checkVersion) return;
@@ -346,7 +356,10 @@ function ComicDrawing({
         <p className="font-bold">
           {checking ? "Checking continuity and lettering, page by page…" : saveState !== "saved" ? "Saving your changes, then we check again." : qa.ready ? (qa.open.length ? "Ready to download. A few things still look a little off:" : "✓ Checked: faces, outfits, props and lettering hold together. Ready to download.") : "Continuity checks"}
         </p>
-        {checking && qaProgress && <p className="text-sm text-neutral-700">{qaProgress}</p>}
+        {checking && (fixing.length
+          ? <p className="text-sm text-neutral-700">Redrawing {fixing.map(panelLabel).join(" and ").toLowerCase()} to fix what the check found. Each fix takes about a minute, then we check it again.</p>
+          : qaProgress && <p className="text-sm text-neutral-700">{qaProgress}</p>)}
+        {checking && <p className="text-sm text-neutral-700">No need to wait: <button className="font-bold underline disabled:opacity-50" disabled={downloading || saveState !== "saved"} onClick={() => handleDownload(true)}>download it now, as it is</button>. The fixes carry on here.</p>}
         {!checking && qaError && !qa.ready && <p role="alert" className="text-red-700">{qaError}</p>}
         {!checking && qa.open.length > 0 && <>
           <ul className="list-disc space-y-1 pl-5 text-sm">{qa.open.map((finding, i) => <li key={i}><strong>{panelLabel(finding.key)}:</strong> {finding.what}</li>)}</ul>
