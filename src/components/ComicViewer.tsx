@@ -72,6 +72,9 @@ function ComicDrawing({
   const [qa, setQa] = useState(initialQa);
   const [checking, setChecking] = useState(false);
   const [qaError, setQaError] = useState<string | null>(null);
+  const [qaProgress, setQaProgress] = useState("");
+  // Set when the reader chooses to download even though the checks couldn't finish.
+  const [downloadAnyway, setDownloadAnyway] = useState(false);
   const checkingRef = useRef(false);
   const qaAttempt = useRef("");
   const restarts = useRef<Record<string, string>>({});
@@ -219,11 +222,15 @@ function ComicDrawing({
     checkingRef.current = true; setChecking(true); setQaError(null);
     try {
       let current: QaStatus = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
+      // Each round checks every page, then the whole book. A flagged panel is redrawn on the server and
+      // changes the revision, so the next round looks at its page again. Unfixable problems end as notes.
       for (let round = 0; round < 3 && current.required && !current.ready; round++) {
         const before = current.revision;
+        let blocked = false;
         const pageIds = [...(script.cover ? ["cover"] : []), ...script.pages.map((_, p) => String(p + 1))];
-        for (const page of pageIds) {
+        for (const [i, page] of pageIds.entries()) {
           if (current.pages[page]?.status === "accepted") continue;
+          setQaProgress(`${round ? "Checking again" : "Checking"} ${page === "cover" ? "the cover" : `page ${page}`} (${i + 1} of ${pageIds.length}). If a panel looks off, we redraw it: that adds a minute or two.`);
           const canvas = await renderFullPage(page === "cover" ? { kind: "cover" } : { kind: "page", index: Number(page) - 1 }, script, key => `${imageUrl(comicId, key)}?qa=${current.revision}`, style, renderFonts);
           const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
           if (!blob) throw new Error("Couldn't prepare this page for checking.");
@@ -232,8 +239,10 @@ function ComicDrawing({
           if (!response.ok) throw new Error(result.error ?? "Page check interrupted.");
           current = result;
           if (current.revision !== before) break;
+          if (current.pages[page]?.status !== "accepted") blocked = true;
         }
-        if (current.revision === before) {
+        if (current.revision === before && !blocked) {
+          setQaProgress("Final read-through of the whole comic, a few pages at a time…");
           const response = await fetch(`/api/comics/${comicId}/qa`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "final", revision: current.revision }) });
           const result = await response.json();
           if (!response.ok) throw new Error(result.error ?? "Final check interrupted.");
@@ -242,12 +251,12 @@ function ComicDrawing({
         }
         if (current.revision !== before) {
           setImages({}); setVersions(value => Object.fromEntries(keys.map(key => [key, (value[key] ?? 0) + 1])));
-        }
+        } else if (blocked) break;
       }
       setQa(current);
-      if (!current.ready) setQaError(current.final?.notes || "Some pictures need attention before export. Review the findings below, then retry checks.");
-    } catch (error) { setQaError((error as Error).message); }
-    finally { checkingRef.current = false; setChecking(false); }
+      if (!current.ready) setQaError("The checks didn't finish this time. Check again, or download it as it is.");
+    } catch (error) { setQaError(`${(error as Error).message} Check again, or download it as it is.`); }
+    finally { checkingRef.current = false; setChecking(false); setQaProgress(""); }
   }
   const checkVersion = JSON.stringify([script, versions]);
   useEffect(() => {
@@ -260,15 +269,17 @@ function ComicDrawing({
 
   async function requireExportReady() {
     if (saveState !== "saved" || checkingRef.current) throw new Error("Wait for saved changes and continuity checks before downloading.");
+    if (downloadAnyway) return;
     const current: QaStatus = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
     setQa(current);
     if (!current.ready) throw new Error("Finish continuity checks before downloading.");
   }
 
-  async function handleDownload() {
+  async function handleDownload(anyway = false) {
     setDownloading(true);
     try {
-      await requireExportReady();
+      if (anyway) setDownloadAnyway(true);
+      else await requireExportReady();
       await downloadComicPdf(script, urlFor, style, renderFonts);
     } catch (error) { setQaError((error as Error).message); } finally {
       setDownloading(false);
@@ -319,8 +330,8 @@ function ComicDrawing({
         <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
           <button
             type="button"
-            onClick={handleDownload}
-            disabled={!allReady || downloading || !qa.ready || checking || saveState !== "saved"}
+            onClick={() => handleDownload(downloadAnyway)}
+            disabled={!allReady || downloading || !(qa.ready || downloadAnyway) || checking || saveState !== "saved"}
             className="comic-box bg-zap px-8 py-3 font-title text-2xl tracking-wide text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
           >
             {downloading ? "Preparing PDF…" : "⬇ Download PDF"}
@@ -331,15 +342,23 @@ function ComicDrawing({
         </div>
       </div>
 
-      {qa.required && <section aria-live="polite" className="comic-box space-y-3 bg-white p-4">
-        <p className="font-bold">{checking ? "Checking continuity and page readability…" : qa.ready && saveState === "saved" ? "Continuity checks complete." : "Continuity checks must finish before downloading or sharing."}</p>
-        {qaError && <p role="alert" className="text-red-700">{qaError}</p>}
-        {Object.entries(qa.pictures).filter(([, picture]) => picture.status === "blocked" || picture.status === "error").map(([key, picture]) => <p key={key} className="text-sm">{key}: {picture.notes || "This picture needs another try."}</p>)}
-        {[...Object.values(qa.pages).flatMap(page => page?.findings ?? []), ...(qa.final?.findings ?? [])].map((finding, i) => <p key={i} className="text-sm">{finding.key}: {finding.what}</p>)}
-        {allReady && !checking && !qa.ready && <button className="rounded border-2 border-ink px-4 py-2 font-bold" disabled={saveState !== "saved"} onClick={runChecks}>Retry checks</button>}
+      {qa.required && allReady && <section aria-live="polite" className="comic-box space-y-3 bg-white p-4">
+        <p className="font-bold">
+          {checking ? "Checking continuity and lettering, page by page…" : saveState !== "saved" ? "Saving your changes, then we check again." : qa.ready ? (qa.open.length ? "Ready to download. A few things still look a little off:" : "✓ Checked: faces, outfits, props and lettering hold together. Ready to download.") : "Continuity checks"}
+        </p>
+        {checking && qaProgress && <p className="text-sm text-neutral-700">{qaProgress}</p>}
+        {!checking && qaError && !qa.ready && <p role="alert" className="text-red-700">{qaError}</p>}
+        {!checking && qa.open.length > 0 && <>
+          <ul className="list-disc space-y-1 pl-5 text-sm">{qa.open.map((finding, i) => <li key={i}><strong>{panelLabel(finding.key)}:</strong> {finding.what}</li>)}</ul>
+          <p className="text-sm text-neutral-700">We tried redrawing these and the new versions weren&apos;t better. Press <strong>Redraw</strong> on a panel to try your own change, or keep it as it is.</p>
+        </>}
+        {!checking && !qa.ready && saveState === "saved" && <div className="flex flex-wrap gap-3">
+          <button className="rounded border-2 border-ink px-4 py-2 font-bold" onClick={runChecks}>Check again</button>
+          <button className="rounded border-2 border-ink bg-zap px-4 py-2 font-bold text-white disabled:opacity-50" disabled={downloading} onClick={() => handleDownload(true)}>Download anyway</button>
+        </div>}
       </section>}
 
-      {allReady && qa.ready && saveState === "saved" && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
+      {allReady && qa.ready && !qa.open.length && saveState === "saved" && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
 
       {allReady && (
         <p className="text-center text-sm text-neutral-700">
@@ -374,6 +393,13 @@ function ComicDrawing({
       </div>
     </div>
   );
+}
+
+/** "3-2" → "Page 3, panel 2" for the check results. */
+function panelLabel(key: string) {
+  if (key === "cover") return "Cover";
+  const [page, panel] = key.split("-");
+  return `Page ${page}, panel ${panel}`;
 }
 
 /** Every comic goes on Explore for now; the owner can hide it (and bring it back) any time. */

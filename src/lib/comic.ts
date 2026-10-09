@@ -385,7 +385,8 @@ export type CostItem = "cast" | "photo-check" | "character-design" | "object-des
 
 /** Persisted, revision-bound inspection. Rejected candidates are never served as artwork. */
 export type QaFinding = { key: string; failure: string; what: string; fix?: string };
-export type QaCheck = { revision: string; status: "accepted" | "blocked" | "error"; findings: QaFinding[]; at: string; notes?: string };
+/** `open`: hard problems the automatic fixes couldn't solve. The check still finishes so the comic can be downloaded. */
+export type QaCheck = { revision: string; status: "accepted" | "blocked" | "error"; findings: QaFinding[]; at: string; notes?: string; open?: QaFinding[] };
 export type PictureQa = {
   attempts: number;
   status: "generating" | "checking" | "accepted" | "blocked" | "error";
@@ -461,7 +462,7 @@ export type Comic = {
 
 /** Prototype rule: every comic is on Explore unless its owner hid it. */
 export function onExplore(comic: Pick<Comic, "explore" | "qa">): boolean {
-  return comic.explore?.published !== false && (!comic.qa?.version || comic.qa.final?.status === "accepted");
+  return comic.explore?.published !== false && (!comic.qa?.version || (comic.qa.final?.status === "accepted" && !comic.qa.final.open?.length));
 }
 
 /** Every picture in a comic has a key: "cover", or "<page>-<panel>" counting from 1 (e.g. "3-2"). */

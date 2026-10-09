@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDrawingService } from "../src/lib/drawing-service";
 import { artRevision, comicRevision, exportReady, pageRevision } from "../src/lib/qa/state";
-import { decide, type PanelVerdict } from "../src/lib/qa/visual-qa";
+import { decide, sequenceBlockers, type PanelVerdict, type SequenceVerdict } from "../src/lib/qa/visual-qa";
 import type { Comic } from "../src/lib/comic";
 import { recordUsage } from "../src/lib/meter";
 
@@ -99,4 +99,24 @@ test("new manual retry starts a budget only after an explicit blocked retry requ
   await h.service.draw(h.comic.id, "1-1", { restart: true, requestId: "explicit-new-try" });
   await h.service.draw(h.comic.id, "1-1", { restart: true, requestId: "explicit-new-try" });
   assert.equal(h.prompts.length, 3);
+});
+test("a page-check repair gets fresh attempts even when the first drawing used them all", async () => {
+  const h = harness([fail, pass, pass]); await h.service.draw(h.comic.id, "1-1");
+  h.comic.qa!.pictures["1-1"].attempts = 2; // the first drawing needed every attempt
+  await h.service.draw(h.comic.id, "1-1", { repair: "Use the white car" });
+  assert.equal(h.prompts.length, 3); assert.match(h.prompts[2], /white car/);
+  assert.equal(h.images.get("1-1")?.toString(), "candidate-3"); assert.equal(h.comic.qa!.pictures["1-1"].status, "accepted");
+});
+test("a repair that doesn't pass keeps the earlier picture live and accepted", async () => {
+  const h = harness([pass, fail, fail]); await h.service.draw(h.comic.id, "1-1");
+  const old = h.images.get("1-1"); const accepted = h.comic.qa!.pictures["1-1"].accepted!;
+  await assert.rejects(h.service.draw(h.comic.id, "1-1", { repair: "Use the white car" }), /needs another try/);
+  assert.deepEqual(h.images.get("1-1"), old); assert.deepEqual(h.comic.qa!.pictures["1-1"].accepted, accepted);
+  assert.equal(h.comic.qa!.pictures["1-1"].status, "accepted");
+});
+test("page checks only block on concrete hard findings for pictures on the page", () => {
+  const verdict = (findings: SequenceVerdict["findings"], confidence: SequenceVerdict["confidence"] = "medium"): SequenceVerdict => ({ findings, notes: "", confidence });
+  assert.deepEqual(sequenceBlockers(verdict([{ key: "1-1", failure: "UNPLANNED_ELEMENT", what: "extra", fix: "" }], "low"), ["1-1"]), []);
+  assert.equal(sequenceBlockers(verdict([{ key: "1-1", failure: "WARDROBE_UNINTENDED_CHANGE", what: "red shirt", fix: "blue" }]), ["1-1"]).length, 1);
+  assert.deepEqual(sequenceBlockers(verdict([{ key: "9-9", failure: "WARDROBE_UNINTENDED_CHANGE", what: "red shirt", fix: "blue" }]), ["1-1"]), []);
 });
