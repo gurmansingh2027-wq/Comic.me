@@ -41,3 +41,14 @@ node scripts/qa-eval.ts --only 7-3,4-6,3-4 --effort low
 ```
 
 Each check costs about $0.02–0.04 (Claude vision); nothing is drawn. Every request reserves its maximum estimated cost first and the tool stops at $1 in total (`src/lib/qa/budget.ts`). Results so far are in `research/corners-are-for-winning-failure-analysis.md`.
+
+## Before changing what Claude is asked to return
+
+Every structured answer from Claude (the storyboard, the dialogue pass, the visual checks) is defined by a schema in code. Claude compiles each schema into a grammar with a hard size limit; past it, every call fails with "The compiled grammar is too large" and the app shows "our request to Claude was rejected". The storyboard schema sits close to that limit. After editing any schema, run:
+
+```bash
+set -a; source .env.local; set +a
+npm run probe-schemas
+```
+
+It sends a one-token request per schema (free when rejected, about a cent when accepted) and fails loudly if one no longer compiles. The free tests can't catch this, because only Claude knows the limit.
