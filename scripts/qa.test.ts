@@ -67,10 +67,21 @@ test("a rejected redraw preserves old artwork and cannot restart via the same re
   assert.deepEqual(h.images.get("1-1"), old); assert.deepEqual(h.comic.qa!.pictures["1-1"].accepted, accepted);
   await assert.rejects(h.service.draw(h.comic.id, "1-1", options)); assert.equal(h.prompts.length, 3);
 });
-test("uncertain inspections escalate once and cannot pass", () => {
-  const uncertain = { ...pass, confidence: "medium" as const };
-  assert.equal(decide({ verdict: uncertain, attempt: 1, complexity: "low", hasSafeShot: true, escalated: false }), "escalate");
-  assert.equal(decide({ verdict: uncertain, attempt: 1, complexity: "low", hasSafeShot: true, escalated: true }), "flag");
+test("uncertain inspections get one careful look: a clean one then passes, an unjudgeable one cannot", () => {
+  const medium = { ...pass, confidence: "medium" as const };
+  const low = { ...pass, confidence: "low" as const };
+  assert.equal(decide({ verdict: medium, attempt: 1, complexity: "low", hasSafeShot: true, escalated: false }), "escalate");
+  assert.equal(decide({ verdict: medium, attempt: 1, complexity: "low", hasSafeShot: true, escalated: true }), "accept");
+  assert.equal(decide({ verdict: low, attempt: 1, complexity: "low", hasSafeShot: true, escalated: true }), "flag");
+  const hardMedium = { ...medium, failures: [{ failure: "CHARACTER_IDENTITY_DRIFT" as const, what: "no turban" }] };
+  assert.equal(decide({ verdict: hardMedium, attempt: 1, complexity: "high", hasSafeShot: true, escalated: false }), "escalate");
+  assert.equal(decide({ verdict: hardMedium, attempt: 1, complexity: "high", hasSafeShot: true, escalated: true }), "retry");
+  assert.equal(decide({ verdict: { ...hardMedium, confidence: "low" }, attempt: 1, complexity: "high", hasSafeShot: true, escalated: true }), "flag");
+  // Soft findings and failed non-beat dimensions never block.
+  const soft = { ...pass, failures: [{ failure: "UNPLANNED_ELEMENT" as const, what: "a passer-by" }], checks: [{ dimension: "STYLE" as const, status: "fail" as const, note: "flat colour" }] };
+  assert.equal(decide({ verdict: soft, attempt: 1, complexity: "low", hasSafeShot: true, escalated: false }), "accept");
+  const beat = { ...pass, checks: [{ dimension: "SCENE_MATCH" as const, status: "fail" as const, note: "wrong beat" }] };
+  assert.equal(decide({ verdict: beat, attempt: 1, complexity: "high", hasSafeShot: true, escalated: false }), "retry");
 });
 test("export requires current accepted art and final QA; lettering only invalidates composition", async () => {
   const h = harness(); await h.service.draw(h.comic.id, "1-1"); await h.service.draw(h.comic.id, "1-2");
