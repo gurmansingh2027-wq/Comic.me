@@ -38,7 +38,33 @@ export type PanelCast = {
   wardrobe: string;
   emotion: string;
   action: string;
+  /** The canon object they are in or on (e.g. the hero car's id) and where: "driver's seat". */
+  inside?: { objectId: string; position: string };
+  /** "Ask me" look policy: a big look change the story wants here, and whether the user said yes. */
+  lookChange?: string;
+  lookChangeApproved?: boolean;
+  lookChangeReviewed?: boolean;
 };
+
+/** A canon object in a panel, in a given state ("damaged", "stickers peeled"…); empty state = as designed. */
+export type PanelObject = { id: string; state?: string; position?: string };
+
+/**
+ * Screen direction for action: which way things travel across the frame, who is ahead, and
+ * which side the camera is on. Inherited along an action sequence so geography stays readable.
+ */
+export type Motion = {
+  /** e.g. "left-to-right", "right-to-left", "toward-camera", "away-from-camera", "static". */
+  direction: "left-to-right" | "right-to-left" | "toward-camera" | "away-from-camera" | "static";
+  /** Order and relative positions, e.g. "GT-R a nose ahead, Huracan on its right". */
+  order?: string;
+  /** Which side of the action the camera is on, e.g. "outside of the corner". */
+  cameraSide?: string;
+};
+
+/** How hard a shot is to draw correctly: drives QA strictness, retries and fallbacks. */
+export const COMPLEXITIES = ["low", "medium", "high", "very_high"] as const;
+export type Complexity = (typeof COMPLEXITIES)[number];
 
 /**
  * Structured context worked out by the Comic Director for every panel, so each picture is built
@@ -58,7 +84,17 @@ export type SceneContext = {
   /** Who these people are to each other in this moment: "proud father, anxious son". */
   relationships?: string;
   cast: PanelCast[];
+  /** Incidental props (free text). Recurring important things are in `canon`. */
   objects: string[];
+  /** Canon objects (Object Bible) visible in this panel, by id, with their state. */
+  canon?: PanelObject[];
+  /** Action sequence this panel belongs to (panels in one sequence share geography and direction). */
+  sequence?: string;
+  motion?: Motion;
+  /** True when the camera deliberately crosses the action line here (otherwise direction is inherited). */
+  axisChange?: boolean;
+  /** Explicit jump in time or stage; prevents continuity inheritance. */
+  transition?: string;
   /** What must match the previous panel (props in hand, injuries, mess, lighting). */
   continuity: string;
 };
@@ -77,6 +113,10 @@ export type Panel = {
   hero?: boolean;
   /** Why it's a hero moment (reveal, victory, first kiss, biggest joke…). */
   heroReason?: string;
+  /** How risky the shot is to draw correctly (the director's estimate, raised by our own rules). */
+  complexity?: Complexity;
+  /** A simpler composition that tells the same beat, used when the ambitious version keeps failing QA. */
+  safeShot?: string;
 };
 
 /** Most hero panels per comic: 2 for most books, 3 for long ones. */
@@ -225,16 +265,57 @@ export type CastMember = {
   designAttempts: number;
   /** Makes retrying a completed design request safe after a lost response. */
   lastDesignRequestId?: string;
+  /**
+   * How their look is handled across the comic. Identity never changes; this is about clothes,
+   * hair and accessories within each life stage. Default "story".
+   */
+  lookPolicy?: LookPolicy;
 };
+
+/** keep = keep the approved look · story = dress for each scene · ask = keep it, ask before big changes. */
+export const LOOK_POLICIES = ["keep", "story", "ask"] as const;
+export type LookPolicy = (typeof LOOK_POLICIES)[number];
 
 export const MAX_CAST_MEMBERS = 12;
 export const MAX_PHOTOS_PER_CHARACTER = 4;
 export const MAX_DESIGN_ATTEMPTS = 6;
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Object Bible: a recurring important thing (the hero's car, the opponent's car, a family heirloom)
+ * treated almost like a character: a canon design sheet, locked attributes and explicit states.
+ */
+export type CanonObject = {
+  id: string;
+  name: string;
+  kind: "vehicle" | "prop" | "creature" | "place";
+  /** hero = the protagonist's, opponent = the rival's, recurring = appears several times, prop = minor. */
+  role: "hero" | "opponent" | "recurring" | "prop";
+  /** Cast member who owns / drives / carries it. */
+  owner?: string;
+  description: string;
+  /** Identity-critical attributes that must never change: "pearl-white paint", "carbon ducktail spoiler (not a big wing)". */
+  locks: string[];
+  /** Vehicles: which side the driver sits (right-hand drive in India, the UK…). */
+  driverSide?: "left" | "right";
+  /** Explicit, story-driven changes of state ("damaged front lip"); anything else is a failure. */
+  states?: { id: string; label: string; description: string }[];
+  design?: CharacterDesign;
+  designAttempts: number;
+  lastDesignRequestId?: string;
+};
+
+/** Hero, opponent and recurring objects need an approved canon sheet before the storyboard. */
+export function objectNeedsDesign(object: CanonObject): boolean {
+  return object.role !== "prop";
+}
+
+export const MAX_CANON_OBJECTS = 6;
+
 export type CastActivity = { action: string; memberId?: string };
 export type CastState = {
   cast: CastMember[] | null;
+  objects: CanonObject[];
   ready: boolean;
   status: ComicStatus;
   activity?: CastActivity;
@@ -248,15 +329,31 @@ export function identityOnly(description: string): string {
   return description.split(/outfit on this sheet\s*:/i)[0].trim();
 }
 
+/** The outfit on a character's approved design sheet (for the "keep this look" policy). */
+export function sheetOutfit(description: string): string {
+  return description.split(/outfit on this sheet\s*:/i)[1]?.trim() ?? "";
+}
+
 /** Main and supporting characters need an approved design; minor ones are drawn from their description. */
 export function needsDesign(member: CastMember): boolean {
   return member.importance !== "minor";
 }
 
-export function castReady(cast: CastMember[]): boolean {
-  return cast
-    .filter(needsDesign)
-    .every((member) => member.design?.approved && (member.stages ?? []).every((stage) => stage.design?.approved));
+export function castReady(cast: CastMember[], objects: CanonObject[] = []): boolean {
+  return (
+    cast.filter(needsDesign).every((member) => member.design?.approved && !member.design.needsRedraw && (member.stages ?? []).every((stage) => stage.design?.approved && !stage.design.needsRedraw)) &&
+    objects.filter(objectNeedsDesign).every((object) => object.design?.approved && !object.design.needsRedraw)
+  );
+}
+
+export function missingApprovals(cast: CastMember[] = [], objects: CanonObject[] = []): string[] {
+  return [
+    ...cast.filter(needsDesign).flatMap(member => [
+      ...(!member.design?.approved || member.design.needsRedraw ? [member.name] : []),
+      ...(member.stages ?? []).filter(stage => !stage.design?.approved || stage.design.needsRedraw).map(stage => `${member.name} · ${stage.label}`),
+    ]),
+    ...objects.filter(objectNeedsDesign).filter(object => !object.design?.approved || object.design.needsRedraw).map(object => object.name),
+  ];
 }
 
 export const MAX_STAGES_PER_CHARACTER = 4;
@@ -282,7 +379,32 @@ export function comicStep(comic: Pick<Comic, "status" | "stage">): "characters" 
   return drawingApproved(comic) ? "comic" : "storyboard";
 }
 
-export type CostItem = "cast" | "photo-check" | "character-design" | "design-description" | "script" | "picture" | "redraw" | "interview";
+export type CostItem = "cast" | "photo-check" | "character-design" | "object-design" | "design-description" | "script" | "picture" | "redraw" | "interview" | "qa";
+
+/** Persisted, revision-bound inspection. Rejected candidates are never served as artwork. */
+export type QaFinding = { key: string; failure: string; what: string; fix?: string };
+export type QaCheck = { revision: string; status: "accepted" | "blocked" | "error"; findings: QaFinding[]; at: string; notes?: string };
+export type PictureQa = {
+  attempts: number;
+  status: "generating" | "checking" | "accepted" | "blocked" | "error";
+  revision: string;
+  requestId?: string;
+  candidate?: string;
+  simplified?: boolean;
+  escalated?: boolean;
+  findings: QaFinding[];
+  notes?: string;
+  at: string;
+  /** The last accepted artwork survives a failed redraw. */
+  accepted?: { digest: string; revision: string; at: string };
+};
+export type ComicQa = {
+  version?: 1;
+  pictures: Record<string, PictureQa>;
+  pages?: Record<string, QaCheck & { file?: string }>;
+  sequences?: Record<string, QaCheck>;
+  final?: QaCheck;
+};
 
 /** One measured AI call: who served it, which model, what it did, and what it cost. */
 export type CostUsage = {
@@ -314,6 +436,8 @@ export type Comic = {
   story: string;
   intake?: Intake;
   cast?: CastMember[];
+  /** Object Bible: recurring important things with canon designs and locks. */
+  objects?: CanonObject[];
   status: ComicStatus;
   stage?: ComicStage;
   /**
@@ -327,13 +451,15 @@ export type Comic = {
   redraws?: number;
   /** Every paid AI call made for this comic, with its estimated price (see src/lib/costs.ts). */
   costLog?: CostEntry[];
+  /** Visual QA results per picture key, and the page/whole-comic passes. */
+  qa?: ComicQa;
   error?: string;
   script?: ComicScript;
 };
 
 /** Prototype rule: every comic is on Explore unless its owner hid it. */
-export function onExplore(comic: Pick<Comic, "explore">): boolean {
-  return comic.explore?.published !== false;
+export function onExplore(comic: Pick<Comic, "explore" | "qa">): boolean {
+  return comic.explore?.published !== false && (!comic.qa?.version || comic.qa.final?.status === "accepted");
 }
 
 /** Every picture in a comic has a key: "cover", or "<page>-<panel>" counting from 1 (e.g. "3-2"). */

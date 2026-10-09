@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { MAX_STORY_LENGTH, type RemixPreset } from "@/lib/comic";
 import { INTERVIEW_GREETING, recreateGreeting, type InterviewTurn } from "@/lib/interview";
 import { COMIC_STYLES, getStyle } from "@/lib/styles";
+import Countdown from "./Countdown";
 import Stepper from "./Stepper";
 import StylePicker from "./StylePicker";
 import { audioFileName, useVoice } from "./useVoice";
@@ -46,6 +47,59 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+/**
+ * Requests that keep running if the person leaves the page (e.g. to peek at Explore) and comes
+ * back: the result is saved to their progress even if this page isn't open when it arrives, and
+ * a returning page re-attaches to the same request instead of waiting forever.
+ */
+const inFlight = new Map<string, Promise<unknown>>();
+
+function readSaved(): Saved | null {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+function once<T>(key: string, start: () => Promise<T>, persist: (result: T) => void, recover: () => void): Promise<T> {
+  const existing = inFlight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const promise = start();
+  inFlight.set(key, promise);
+  promise.then(persist, recover).finally(() => inFlight.delete(key));
+  return promise;
+}
+
+/** Writing up the story from the interview (about 30 seconds). */
+function composeStory(turns: InterviewTurn[], session?: string): Promise<Composed> {
+  return once(
+    `compose:${session}:${turns.length}`,
+    () => postJson<Composed>("/api/interview/compose", { turns, session }),
+    (composed) => {
+      const saved = readSaved();
+      if (saved?.phase === "composing") localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, phase: "review", composed }));
+    },
+    () => {
+      const saved = readSaved();
+      if (saved?.phase === "composing") localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, phase: saved.composed ? "review" : "interview" }));
+    },
+  );
+}
+
+/** The interviewer's next question. */
+function nextQuestion(turns: InterviewTurn[], session?: string): Promise<{ say: string; done: boolean }> {
+  return once(
+    `turn:${session}:${turns.length}`,
+    () => postJson<{ say: string; done: boolean }>("/api/interview/turn", { turns, session }),
+    (reply) => {
+      const saved = readSaved();
+      if (saved && saved.turns.length === turns.length) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, turns: [...turns, { role: "ai", text: reply.say }] }));
+    },
+    () => {},
+  );
+}
+
 /** `preset`: when arriving from Explore's "Recreate", the format to reuse (style, structure, cover direction). */
 export default function StoryStudio({ preset }: { preset?: RemixPreset | null }) {
   const router = useRouter();
@@ -57,6 +111,14 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
   const [voiceOn, setVoiceOn] = useState(true);
   const voice = useVoice();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const mounted = useRef(true);
+  const [composeStarted, setComposeStarted] = useState(() => Date.now());
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   // Keep the session across refreshes.
   useEffect(() => {
@@ -79,6 +141,17 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
     );
     setLoaded(true);
   }, [preset]);
+
+  // Coming back to the page: pick up anything that was still running, so nothing is ever stuck.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (!loaded || resumed.current) return;
+    resumed.current = true;
+    if (state.phase === "composing") void compose(state.turns, state.session);
+    else if (state.phase === "interview" && state.turns.at(-1)?.role === "user") void ask(state.turns, state.session);
+    // Runs once after restoring saved progress.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
   useEffect(() => {
     if (loaded) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state, loaded]);
@@ -89,32 +162,39 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
   const update = (patch: Partial<Saved>) => setState((current) => ({ ...current, ...patch }));
   const answers = state.turns.filter((turn) => turn.role === "user").length;
 
-  async function compose(turns: InterviewTurn[]) {
+  async function compose(turns: InterviewTurn[], session = state.session) {
     update({ phase: "composing" });
+    setComposeStarted(Date.now());
     try {
-      const composed = await postJson<Composed>("/api/interview/compose", { turns, session: state.session });
-      update({ phase: "review", composed });
+      const composed = await composeStory(turns, session);
+      if (mounted.current) setState((current) => (current.phase === "composing" ? { ...current, phase: "review", composed } : current));
     } catch (err) {
+      if (!mounted.current) return;
       setError((err as Error).message);
-      update({ phase: "interview" });
+      setState((current) => (current.phase === "composing" ? { ...current, phase: current.composed ? "review" : "interview" } : current));
+    }
+  }
+
+  async function ask(turns: InterviewTurn[], session = state.session) {
+    setBusy("thinking");
+    try {
+      const reply = await nextQuestion(turns, session);
+      if (!mounted.current) return;
+      const next: InterviewTurn[] = [...turns, { role: "ai", text: reply.say }];
+      setState((current) => (current.turns.length === turns.length ? { ...current, turns: next } : current));
+      if (voiceOn) voice.say(reply.say, session);
+      if (reply.done) await compose(next, session);
+    } catch (err) {
+      if (mounted.current) setError((err as Error).message);
+    } finally {
+      if (mounted.current) setBusy(null);
     }
   }
 
   async function sendAnswer(text: string) {
     const turns: InterviewTurn[] = [...state.turns, { role: "user", text }];
     update({ turns });
-    setBusy("thinking");
-    try {
-      const reply = await postJson<{ say: string; done: boolean }>("/api/interview/turn", { turns, session: state.session });
-      const next: InterviewTurn[] = [...turns, { role: "ai", text: reply.say }];
-      update({ turns: next });
-      if (voiceOn) voice.say(reply.say, state.session);
-      if (reply.done) await compose(next);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
+    await ask(turns);
   }
 
   async function handleMic() {
@@ -193,7 +273,16 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
   const recreating = preset && state.presetId === preset.sourceId ? preset : null;
   return (
     <div className="space-y-8">
-      <Stepper current={step} />
+      <Stepper
+        current={step}
+        available={state.composed ? ["Your story", "Style"] : []}
+        onSelect={(target) => {
+          voice.stopSpeaking();
+          setError(null);
+          if (target === "Style" && state.composed) update({ phase: "style" });
+          if (target === "Your story") update({ phase: state.composed ? "review" : "interview" });
+        }}
+      />
 
       {recreating && (
         <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded border-3 border-ink bg-pop px-4 py-3">
@@ -251,11 +340,23 @@ export default function StoryStudio({ preset }: { preset?: RemixPreset | null })
             {(busy === "listening" || busy === "thinking" || state.phase === "composing") && (
               <p className="text-center text-sm font-bold text-neutral-600">
                 {state.phase === "composing"
-                  ? "Writing up your story… (about a minute)"
+                  ? <>Writing up your story… <Countdown startedAt={composeStarted} seconds={45} className="font-normal" /></>
                   : busy === "listening"
                     ? "Listening back to what you said…"
                     : "Thinking of the next question…"}
               </p>
+            )}
+            {state.phase === "composing" && (
+              <div className="flex flex-wrap justify-center gap-3 text-sm">
+                {state.composed && (
+                  <button type="button" onClick={() => update({ phase: "review" })} className="rounded border-2 border-ink bg-white px-3 py-1 font-bold hover:bg-pop">
+                    ← Back to my last version
+                  </button>
+                )}
+                <button type="button" onClick={() => update({ phase: "interview" })} className="underline">
+                  Keep talking instead
+                </button>
+              </div>
             )}
             <div ref={bottomRef} />
           </div>

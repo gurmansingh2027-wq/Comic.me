@@ -1,3 +1,4 @@
+import { qaStatus } from "@/lib/qa/service";
 import { notFound, redirect } from "next/navigation";
 import ComicViewer from "@/components/ComicViewer";
 import Stepper from "@/components/Stepper";
@@ -30,8 +31,9 @@ export default async function ComicPage(props: PageProps<"/comic/[id]">) {
         comicId={comic.id}
         styleId={comic.styleId}
         script={comic.script}
-        alreadyDrawn={keys.filter((_, i) => drawn[i])}
+        alreadyDrawn={keys.filter((key, i) => drawn[i] && (!comic.qa?.version || qaStatus(comic).pictures[key]?.accepted))}
         initialPublished={onExplore(comic)}
+        initialQa={qaStatus(comic)}
       />
       {comic.costLog && comic.costLog.length > 0 && (
         <details className="mx-auto max-w-xl text-sm text-neutral-600">

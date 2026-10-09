@@ -5,6 +5,7 @@ import type { BetaMessageParam } from "@anthropic-ai/sdk/resources/beta/messages
 import type { z } from "zod";
 import { claudeCost } from "./costs";
 import { requireEnv, UserFacingError } from "./errors";
+import { auditBudgetActive, reserveAuditCost, settleAuditCost } from "./qa/budget";
 import { recordUsage } from "./meter";
 
 const MODEL = "claude-opus-5-5";
@@ -32,13 +33,15 @@ export async function askClaude<S extends z.ZodType>({
   /** What this call is for, for the cost log (e.g. "comic-director"). */
   operation?: string;
 }): Promise<z.infer<S>> {
-  const client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY") });
+  const budgeted = auditBudgetActive();
+  const client = new Anthropic({ apiKey: requireEnv("ANTHROPIC_API_KEY"), ...(budgeted ? { maxRetries: 0 } : {}), timeout: 180_000 });
+  const input = { model: MODEL, system, messages: [{ role: "user" as const, content: user }] };
+  const reservation = budgeted ? await reserveAuditCost((await client.beta.messages.countTokens(input)).input_tokens, maxTokens) : 0;
   const stream = client.beta.messages.stream({
     model: MODEL,
     max_tokens: maxTokens,
     // If Claude's safety filters decline, the API retries on a fallback model automatically.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    ...(budgeted ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }),
     output_config: { effort, format: betaZodOutputFormat(schema) },
     system,
     messages: [{ role: "user", content: user }],
@@ -46,13 +49,14 @@ export async function askClaude<S extends z.ZodType>({
   const response = await stream.finalMessage();
   const inputTokens =
     response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0) + (response.usage.cache_read_input_tokens ?? 0);
+  await settleAuditCost(reservation, claudeCost(response.model, inputTokens, response.usage.output_tokens));
   recordUsage({
     provider: "anthropic",
     model: response.model,
     operation,
     inputTokens,
     outputTokens: response.usage.output_tokens,
-    usd: claudeCost(MODEL, inputTokens, response.usage.output_tokens),
+    usd: claudeCost(response.model, inputTokens, response.usage.output_tokens),
     measured: true,
   });
 

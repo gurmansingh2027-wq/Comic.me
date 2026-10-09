@@ -101,7 +101,10 @@ export async function loadCastFile(id: string, file: string): Promise<Buffer | n
 }
 
 export async function saveImage(id: string, key: string, image: Buffer): Promise<void> {
-  await writeFile(imagePath(id, key), image);
+  const target = imagePath(id, key);
+  const temp = `${target}-${randomUUID()}.tmp`;
+  await writeFile(temp, image);
+  await rename(temp, target);
 }
 
 export async function loadImage(id: string, key: string): Promise<Buffer | null> {
@@ -160,4 +163,20 @@ async function upgradeLegacyComic(legacy: LegacyComic): Promise<Comic> {
   }
   await saveComic(comic);
   return comic;
+}
+
+/** Private candidates and rendered QA pages; never served as accepted images. */
+export function qaFilePath(id: string, file: string): string {
+  if (!/^[a-z0-9-]+\.(webp|jpg)$/.test(file)) throw new Error("Invalid QA file");
+  return path.join(comicDir(id), "qa", file);
+}
+export async function saveQaFile(id: string, file: string, data: Buffer): Promise<void> {
+  await mkdir(path.join(comicDir(id), "qa"), { recursive: true });
+  const target = qaFilePath(id, file);
+  const temp = `${target}-${randomUUID()}.tmp`;
+  await writeFile(temp, data);
+  await rename(temp, target);
+}
+export async function loadQaFile(id: string, file: string): Promise<Buffer | null> {
+  return readFile(qaFilePath(id, file)).catch(() => null);
 }

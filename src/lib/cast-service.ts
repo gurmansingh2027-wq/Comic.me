@@ -2,11 +2,11 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { z } from "zod";
-import { castReady, MAX_STAGES_PER_CHARACTER, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, type CastActivity, type CastMember, type CastState, type Comic } from "./comic";
+import { castReady, LOOK_POLICIES, MAX_CANON_OBJECTS, MAX_STAGES_PER_CHARACTER, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, type CanonObject, type CastActivity, type CastMember, type CastState, type Comic } from "./comic";
 import { addCost } from "./costs";
 import { metered } from "./meter";
 import { fakeImagesEnabled } from "./engines/art";
-import { checkPhotos, describeDesign, drawDesign, planCast } from "./engines/characters";
+import { checkPhotos, describeDesign, drawDesign, drawObjectDesign, planCast } from "./engines/characters";
 import { UserFacingError } from "./errors";
 import { castFilePath, loadCastFile, loadComic, saveCastFile, saveComic, withComicLock } from "./storage";
 import { getStyle } from "./styles";
@@ -26,6 +26,17 @@ const StageFields = z.object({
   look: z.string().trim().min(1).max(1500),
   outfit: z.string().trim().max(600).optional(),
 });
+const objectId = z.string().regex(/^[a-z0-9-]{1,40}$/);
+const ObjectFields = z.object({
+  name: z.string().trim().min(1).max(100),
+  kind: z.enum(["vehicle", "prop", "creature", "place"]),
+  role: z.enum(["hero", "opponent", "recurring", "prop"]),
+  owner: z.string().trim().max(100).optional(),
+  description: z.string().trim().min(1).max(2000),
+  driverSide: z.enum(["left", "right"]).optional(),
+  states: z.array(z.object({ id: z.string().max(40), label: z.string().max(100), description: z.string().max(500) })).max(8).optional(),
+  locks: z.array(z.string().trim().min(1).max(200)).max(12),
+});
 export const CastCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("initialize") }),
   z.object({ action: z.literal("add"), member: Fields }),
@@ -38,8 +49,16 @@ export const CastCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("stage-add"), memberId, stage: StageFields }),
   z.object({ action: z.literal("stage-update"), memberId, stageId, changes: StageFields.partial() }),
   z.object({ action: z.literal("stage-remove"), memberId, stageId }),
+  z.object({ action: z.literal("look-policy"), memberId, policy: z.enum(LOOK_POLICIES) }),
+  z.object({ action: z.literal("object-add"), object: ObjectFields }),
+  z.object({ action: z.literal("object-update"), objectId, changes: ObjectFields.partial() }),
+  z.object({ action: z.literal("object-remove"), objectId }),
+  z.object({ action: z.literal("object-design"), objectId, requestId: z.string().uuid(), expectedDesign: z.string().max(90).optional(), feedback: z.string().trim().max(1500).optional() }),
+  z.object({ action: z.literal("object-approve"), objectId, file: z.string().max(90) }),
 ]);
 export type CastCommand = z.infer<typeof CastCommandSchema>;
+type ObjectCommand = Extract<CastCommand, { action: `object-${string}` }>;
+const isObjectCommand = (command: CastCommand): command is ObjectCommand => command.action.startsWith("object-");
 export type PhotoUpload = { type: string; data: Buffer };
 
 /** Decode rather than trust the extension or browser-provided MIME type. */
@@ -60,7 +79,7 @@ export async function normalizePhoto(photo: PhotoUpload): Promise<Buffer> {
   }
 }
 
-const defaultDependencies = { loadComic, saveComic, loadCastFile, saveCastFile, castFilePath, withComicLock, planCast, checkPhotos, drawDesign, describeDesign, normalizePhoto };
+const defaultDependencies = { loadComic, saveComic, loadCastFile, saveCastFile, castFilePath, withComicLock, planCast, checkPhotos, drawDesign, drawObjectDesign, describeDesign, normalizePhoto };
 type Dependencies = typeof defaultDependencies;
 
 const shared = globalThis as typeof globalThis & {
@@ -72,7 +91,8 @@ const shared = globalThis as typeof globalThis & {
 export function createCastService(deps: Dependencies, activity = new Map<string, CastActivity>(), flights = new Map<string, Promise<CastState>>()) {
   const snapshot = (comic: Comic): CastState => ({
     cast: comic.cast ?? null,
-    ready: comic.cast !== undefined && castReady(comic.cast),
+    objects: comic.objects ?? [],
+    ready: comic.cast !== undefined && castReady(comic.cast, comic.objects ?? []),
     status: comic.status,
     activity: activity.get(comic.id),
   });
@@ -143,12 +163,77 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
       }
     });
   }
+  function objectSlug(comic: Comic, name: string) {
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 30) || "object";
+    let slug = base;
+    for (let n = 2; comic.objects?.some((o) => o.id === slug); n++) slug = `${base}-${n}`;
+    return slug;
+  }
+  function findObject(comic: Comic, id: string): CanonObject {
+    const object = comic.objects?.find((o) => o.id === id);
+    if (!object) throw new UserFacingError("That object wasn't found. Refresh and try again.", 404);
+    return object;
+  }
+  /** Object Bible commands: add, edit, remove, draw and approve a canon sheet. */
+  async function objectCommand(comic: Comic, command: ObjectCommand) {
+    const objects = (comic.objects ??= []);
+    switch (command.action) {
+      case "object-add":
+        if (objects.length >= MAX_CANON_OBJECTS) throw new UserFacingError(`A comic can have at most ${MAX_CANON_OBJECTS} important things.`);
+        objects.push({ ...command.object, owner: command.object.owner || undefined, id: objectSlug(comic, command.object.name), designAttempts: 0 });
+        return;
+      case "object-update": {
+        const object = findObject(comic, command.objectId);
+        const visual = command.changes.description !== undefined || command.changes.locks !== undefined || command.changes.driverSide !== undefined || command.changes.kind !== undefined;
+        Object.assign(object, command.changes);
+        if (visual && object.design) object.design = { ...object.design, approved: false, needsRedraw: true };
+        return;
+      }
+      case "object-remove":
+        comic.objects = objects.filter((o) => o.id !== command.objectId);
+        return;
+      case "object-design": {
+        const object = findObject(comic, command.objectId);
+        if (object.lastDesignRequestId === command.requestId) return;
+        if (object.design?.file !== command.expectedDesign) throw new UserFacingError("This design has changed. Refresh and try again.", 409);
+        if (object.designAttempts >= MAX_DESIGN_ATTEMPTS) throw new UserFacingError("You've used all six designs. You can still approve the current one.", 409);
+        const style = getStyle(comic.styleId);
+        if (!style) throw new UserFacingError("This comic's style no longer exists.", 500);
+        const { result: image, usage } = await metered(() =>
+          deps.drawObjectDesign({
+            object,
+            style,
+            previousDesignPath: object.design && !object.design.needsRedraw ? deps.castFilePath(comic.id, object.design.file) : undefined,
+            feedback: command.feedback,
+          }),
+        );
+        const file = `${randomUUID()}.webp`;
+        await deps.saveCastFile(comic.id, file, image);
+        object.design = { file, approved: false };
+        object.designAttempts++;
+        object.lastDesignRequestId = command.requestId;
+        addCost(comic, "object-design", object.name, usage);
+        return;
+      }
+      case "object-approve": {
+        const object = findObject(comic, command.objectId);
+        if (object.design?.file !== command.file || object.design?.needsRedraw) throw new UserFacingError("Approve the current design shown on this page.", 409);
+        object.design = { ...object.design, approved: true, needsRedraw: false };
+        return;
+      }
+    }
+  }
   async function execute(id: string, command: CastCommand) {
-    return locked(id, { action: command.action, memberId: "memberId" in command ? command.memberId : undefined }, async (comic) => {
+    return locked(id, { action: command.action, memberId: "memberId" in command ? command.memberId : "objectId" in command ? command.objectId : undefined }, async (comic) => {
       if (command.action === "initialize") {
         if (comic.cast !== undefined) return;
-        const { result: planned, usage } = await metered(() => deps.planCast(comic.story, comic.intake));
+        const { result: plan, usage } = await metered(() => deps.planCast(comic.story, comic.intake));
         addCost(comic, "cast", undefined, usage);
+        const planned = plan.cast;
+        comic.objects = [];
+        for (const object of plan.objects.slice(0, MAX_CANON_OBJECTS)) {
+          comic.objects.push({ ...object, id: objectSlug(comic, object.name), designAttempts: 0 });
+        }
         comic.cast = [];
         for (const person of planned.slice(0, MAX_CAST_MEMBERS)) {
           const fields = Fields.parse({ ...person, description: person.description.slice(0, 2000), source: "ai" });
@@ -171,6 +256,10 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
         return;
       }
       if (comic.cast === undefined) throw new UserFacingError("Let us find the characters in your story first.", 409);
+      if (isObjectCommand(command)) {
+        await objectCommand(comic, command);
+        return;
+      }
       if (command.action === "add") {
         if (comic.cast.length >= MAX_CAST_MEMBERS) throw new UserFacingError("A comic can have at most 12 characters.");
         assertUnique(comic, command.member.name);
@@ -289,14 +378,17 @@ export function createCastService(deps: Dependencies, activity = new Map<string,
         case "stage-remove":
           member.stages = (member.stages ?? []).filter((stage) => stage.id !== command.stageId);
           break;
+        case "look-policy":
+          member.lookPolicy = command.policy;
+          break;
       }
     });
   }
   return {
     async read(id: string) { return snapshot(await requireComic(id)); },
     command(id: string, command: CastCommand): Promise<CastState> {
-      if (command.action !== "design") return execute(id, command);
-      const key = `${id}/${command.memberId}/${command.stageId ?? "main"}/${command.requestId}`;
+      if (command.action !== "design" && command.action !== "object-design") return execute(id, command);
+      const key = command.action === "design" ? `${id}/${command.memberId}/${command.stageId ?? "main"}/${command.requestId}` : `${id}/object/${command.objectId}/${command.requestId}`;
       const existing = flights.get(key);
       if (existing) return existing;
       const promise = execute(id, command);

@@ -1,0 +1,233 @@
+import "server-only";
+import sharp from "sharp";
+import { z } from "zod";
+import { askClaude, imageBlock } from "../claude";
+import type { CanonObject, Complexity, ComicScript, Panel } from "../comic";
+import type { LedgerEntry } from "../continuity";
+import type { ComicStyle } from "../styles";
+import { FAILURE_CLASS_IDS, FAILURE_CLASSES, failureGuide, isHard, type FailureClass } from "./failure-classes";
+
+// Visual QA: a multimodal inspector that looks at a generated picture BEFORE it's accepted,
+// with the storyboard intent, the Continuity Ledger, the canon sheets and the previous panel.
+// It returns structured findings, and `decide` turns them into ACCEPT / RETRY / SIMPLIFY /
+// ESCALATE / FLAG. Same model as the rest of the app (Claude Opus 5.5); cost is controlled by
+// effort (low for the routine pass, high to escalate) and by small, downscaled images.
+
+export const DIMENSIONS = [
+  "CHARACTER_IDENTITY",
+  "LIFE_STAGE",
+  "WARDROBE",
+  "VEHICLE_IDENTITY",
+  "OBJECT_IDENTITY",
+  "SCENE_MATCH",
+  "ACTION_MATCH",
+  "POSE_ANATOMY",
+  "PHYSICS",
+  "ROAD_GEOMETRY",
+  "OCCLUSION",
+  "SCREEN_DIRECTION",
+  "CAMERA_CONTINUITY",
+  "STYLE",
+] as const;
+
+const FindingSchema = z.object({
+  failure: z.enum(FAILURE_CLASS_IDS),
+  what: z.string().describe("Exactly what is wrong, in one sentence (which person/vehicle, what you see vs what's required)"),
+});
+
+const PanelVerdictSchema = z.object({
+  checks: z
+    .array(z.object({ dimension: z.enum(DIMENSIONS), status: z.enum(["pass", "minor", "fail", "n/a"]), note: z.string() }))
+    .describe("One entry per relevant dimension"),
+  failures: z.array(FindingSchema).describe("Every failure you are confident about; empty if the picture is correct"),
+  confidence: z.enum(["high", "medium", "low"]).describe("How sure you are of this verdict overall"),
+  fix: z.string().describe("If anything failed: precise instructions for the redraw (what to change, what must stay). Empty if nothing failed."),
+});
+export type PanelVerdict = z.infer<typeof PanelVerdictSchema>;
+
+const QA_PROMPT = `You are the continuity editor of a comic studio. Every picture is part of a sequence: a beautiful picture with the wrong person, the wrong car, the wrong colour, broken physics or broken geography is a FAILED picture.
+
+Compare the generated picture against the storyboard intent, the Continuity Ledger facts and the reference images. Be strict on hard failures, tolerant of harmless variation:
+- Hard: wrong or replaced character; missing identity-critical markers (turban, glasses, beard…); wrong age; wrong person in a vehicle; a person twice; a canon vehicle/object with the wrong base colour, model, body kit or a missing/changed locked livery where it should be visible; duplicated vehicles; people clipping through vehicles or sitting outside them when they should be inside; impossible poses or anatomy; vehicles off the road or roads that can't exist; travel direction or who-is-ahead contradicting the ledger; the picture not showing the storyboard beat.
+- Soft (note, don't fail): small background differences, lighting variation, unimportant passers-by, texture changes, tiny details you can't make out. Camera framing may vary if the same action and story beat remain clear. A wider view of the same action is NOT SCENE_MISMATCH; reserve that hard class for a different or missing narrative event. Simplified compositions intentionally change framing.
+- Night lighting may darken a colour but must not change its hue: a white car can look blue-grey in shadow, never yellow, orange, green or black under even light.
+- Only judge what is visible. Don't fail a livery that's on the side we can't see; do fail one that should be visible and isn't.
+- If you're unsure, say so with low confidence rather than guessing.
+
+Failure classes:
+${failureGuide()}`;
+
+/** Downscaled JPEG for QA: enough to judge identity and geometry, cheap in tokens. */
+export async function qaImage(data: Buffer, maxSide = 640): Promise<Buffer> {
+  return sharp(data).resize(maxSide, maxSide, { fit: "inside", withoutEnlargement: true }).flatten({ background: "#ffffff" }).jpeg({ quality: 78 }).toBuffer();
+}
+
+export type QaReference = { label: string; data: Buffer };
+
+/** Facts for one panel, as plain text the inspector can check against. */
+export function panelFacts(panel: Panel, entry: LedgerEntry | undefined, objects: CanonObject[]): string {
+  const lines = [
+    `Storyboard beat: ${panel.scene}`,
+    panel.context && `Where/when: ${[panel.context.location, panel.context.period, panel.context.timeOfDay, panel.context.weather].filter(Boolean).join(", ")}`,
+    entry?.people.length
+      ? `People (each exactly once): ${entry.people
+          .map((p) => `${p.name}${p.stage ? ` [age stage: ${p.stage}]` : ""} wearing ${p.wardrobeFromSheet ? "their approved design-sheet outfit" : p.wardrobe}${p.inside ? `, inside ${p.inside.objectId} (${p.inside.position})${p.inferred ? " (may be hidden by glass/angle)" : ""}` : ""}`)
+          .join("; ")}`
+      : "People: none named",
+    entry?.objects.length
+      ? `Canon objects: ${entry.objects
+          .map((o) => {
+            const canon = objects.find((c) => c.id === o.id);
+            return `${canon?.name ?? o.id}: ${canon?.description ?? ""} [locks: ${(canon?.locks ?? []).join("; ")}]${o.state ? ` state: ${o.state} (${canon?.states?.find(state => state.id === o.state)?.description ?? "as designed"})` : ""}${canon?.driverSide ? ` driver on the ${canon.driverSide}` : ""}`;
+          })
+          .join(" | ")}`
+      : "",
+    panel.context?.continuity && `Continuity: ${panel.context.continuity}`,
+    entry?.motion && entry.motion.direction !== "static" && `Motion: travel ${entry.motion.direction}${entry.motion.order ? `; order: ${entry.motion.order}` : ""}${entry.motion.cameraSide ? `; camera: ${entry.motion.cameraSide}` : ""}`,
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+/** Inspects one generated picture. */
+export async function checkPanel({
+  image,
+  facts,
+  style,
+  references,
+  previous,
+  effort = "low",
+}: {
+  image: Buffer;
+  facts: string;
+  style: ComicStyle;
+  references: QaReference[];
+  previous?: Buffer;
+  effort?: "low" | "high";
+}): Promise<PanelVerdict> {
+  if (qaMockEnabled()) return { checks: [{ dimension: "SCENE_MATCH", status: "pass", note: "mock" }], failures: [], confidence: "high", fix: "" };
+  const blocks = [
+    { type: "text" as const, text: "Image 1: the GENERATED picture to check." },
+    imageBlock(await qaImage(image, 768), "image/jpeg"),
+    ...(
+      await Promise.all(
+        references.map(async (ref, i) => [
+          { type: "text" as const, text: `Image ${i + 2}: reference: ${ref.label}.` },
+          imageBlock(await qaImage(ref.data, 512), "image/jpeg"),
+        ]),
+      )
+    ).flat(),
+    ...(previous
+      ? [{ type: "text" as const, text: `Image ${references.length + 2}: the PREVIOUS panel of this scene (for continuity: same vehicles, colours, clothes, direction).` }, imageBlock(await qaImage(previous, 512), "image/jpeg")]
+      : []),
+    { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}\n\nCheck image 1.` },
+  ];
+  return askClaude({ system: QA_PROMPT, user: blocks, schema: PanelVerdictSchema, effort, operation: `visual-qa-${effort}`, maxTokens: 4000 });
+}
+
+export type Decision = "accept" | "retry" | "simplify" | "escalate" | "flag";
+
+/** How many attempts a picture gets, by how risky the shot is. */
+export function maxAttempts(complexity: Complexity): number {
+  return complexity === "high" || complexity === "very_high" ? 3 : 2;
+}
+
+export function hardFailures(verdict: PanelVerdict): FailureClass[] {
+  const failures = verdict.failures.map((f) => f.failure).filter(isHard);
+  if (!failures.length && verdict.checks.some(check => check.status === "fail")) failures.push("SCENE_MISMATCH");
+  return failures;
+}
+
+/**
+ * Turns a verdict into an action. Correctness beats ambition: repeated hard failures switch to
+ * the simpler safe shot before giving up, and nothing with a hard failure is silently accepted.
+ */
+export function decide({ verdict, attempt, complexity, hasSafeShot, escalated }: { verdict: PanelVerdict; attempt: number; complexity: Complexity; hasSafeShot: boolean; escalated: boolean }): Decision {
+  const hard = hardFailures(verdict);
+  if (verdict.confidence !== "high") return escalated ? "flag" : "escalate";
+  if (hard.length === 0 && !verdict.checks.some(check => check.status === "fail")) return "accept";
+  const limit = maxAttempts(complexity);
+  if (attempt >= limit) return "flag";
+  // The last attempt (or the second, for risky shots that already failed once) uses the safe shot.
+  if (hasSafeShot && (attempt === limit - 1 || complexity === "very_high")) return "simplify";
+  return "retry";
+}
+
+// --- Page and whole-comic passes ------------------------------------------------------------------
+
+const SequenceSchema = z.object({
+  findings: z
+    .array(z.object({ key: z.string().describe('Picture key, e.g. "3-2" or "cover"'), failure: z.enum(FAILURE_CLASS_IDS), what: z.string(), fix: z.string() }))
+    .describe("Problems you are confident about, each tied to the picture that should be redrawn"),
+  notes: z.string().describe("One line summary"),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+export type SequenceVerdict = z.infer<typeof SequenceSchema>;
+
+const SEQUENCE_PROMPT = `${QA_PROMPT}
+
+You are now checking a whole page (or the whole comic) at once, which exposes problems single pictures hide: the same character or vehicle drifting between panels (colour, livery, model, face, clothes mid-scene), duplicate people, contradictory geography or direction between consecutive panels, anyone teleporting, objects appearing or vanishing, sudden proportion changes, and (on lettered pages) balloons far from their speaker, covering faces, or text cut off. Tie every finding to the single picture that should be redrawn (the one that's inconsistent with the canon sheets and the majority).`;
+
+/** Checks a lettered page (as rendered for the reader) for cross-panel continuity and lettering problems. */
+export async function checkSequence({
+  pageImage,
+  label,
+  facts,
+  style,
+  references,
+  effort = "low",
+}: {
+  pageImage: Buffer;
+  label: string;
+  facts: string;
+  style: ComicStyle;
+  references: QaReference[];
+  effort?: "low" | "high";
+}): Promise<SequenceVerdict> {
+  if (qaMockEnabled()) return { findings: [], notes: "mock", confidence: "high" };
+  const blocks = [
+    { type: "text" as const, text: `Image 1: ${label}.` },
+    imageBlock(await qaImage(pageImage, 1400), "image/jpeg"),
+    ...(
+      await Promise.all(
+        references.map(async (ref, i) => [{ type: "text" as const, text: `Image ${i + 2}: reference: ${ref.label}.` }, imageBlock(await qaImage(ref.data, 512), "image/jpeg")]),
+      )
+    ).flat(),
+    { type: "text" as const, text: `Comic style: ${style.label}.\n\n${facts}` },
+  ];
+  return askClaude({ system: SEQUENCE_PROMPT, user: blocks, schema: SequenceSchema, effort, operation: `sequence-qa-${effort}`, maxTokens: 4000 });
+}
+
+/** A labelled contact sheet of pictures (for the whole-comic pass): one image instead of forty. */
+export async function contactSheet(pictures: { key: string; data: Buffer }[], cell = 300, columns = 8): Promise<Buffer> {
+  const rows = Math.ceil(pictures.length / columns);
+  const tiles = await Promise.all(
+    pictures.map(async (picture, i) => {
+      const thumb = await sharp(picture.data).resize(cell, cell, { fit: "contain", background: "#ffffff" }).toBuffer();
+      const label = Buffer.from(`<svg width="${cell}" height="34"><rect width="70" height="34" fill="#000"/><text x="8" y="25" font-family="sans-serif" font-size="22" fill="#fff">${picture.key}</text></svg>`);
+      const tile = await sharp(thumb).composite([{ input: label, top: 0, left: 0 }]).png().toBuffer();
+      return { input: tile, left: (i % columns) * cell, top: Math.floor(i / columns) * cell };
+    }),
+  );
+  return sharp({ create: { width: columns * cell, height: rows * cell, channels: 3, background: "#ffffff" } }).composite(tiles).jpeg({ quality: 80 }).toBuffer();
+}
+
+/** Ledger facts for many panels, compactly, for page and whole-comic passes. */
+export function sequenceFacts(script: ComicScript, entries: LedgerEntry[], objects: CanonObject[], keys: string[]): string {
+  return keys
+    .map((key) => {
+      const entry = entries.find((e) => e.key === key);
+      const [p, i] = key.split("-").map((n) => Number(n) - 1);
+      const panel = script.pages[p]?.panels[i];
+      if (!panel) return null;
+      return `[${key}] ${panelFacts(panel, entry, objects).replace(/\n/g, " | ")}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+export const HARD_FAILURE_COUNT = (verdict: PanelVerdict) => hardFailures(verdict).length;
+export { FAILURE_CLASSES };
+
+export function qaMockEnabled(): boolean {
+  return process.env.COMICME_FAKE_QA === "1" && process.env.COMICME_FAKE_IMAGES === "1" && !!process.env.COMICME_STORAGE_DIR && process.env.NODE_ENV !== "production";
+}

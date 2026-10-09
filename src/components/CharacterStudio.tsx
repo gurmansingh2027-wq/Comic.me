@@ -3,11 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { CastCommand } from "@/lib/cast-service";
-import { castFileUrl, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, MAX_STAGES_PER_CHARACTER, needsDesign, type CastMember, type CastState, type LifeStage } from "@/lib/comic";
+import { castFileUrl, missingApprovals, type LookPolicy, MAX_CAST_MEMBERS, MAX_DESIGN_ATTEMPTS, MAX_PHOTO_BYTES, MAX_PHOTOS_PER_CHARACTER, MAX_STAGES_PER_CHARACTER, needsDesign, type CastMember, type CastState, type LifeStage } from "@/lib/comic";
 import { COPY } from "@/lib/copy";
 import { getStyle } from "@/lib/styles";
 import Countdown, { ESTIMATES } from "./Countdown";
 import Stepper from "./Stepper";
+import ObjectStudio from "./ObjectStudio";
 
 type Fields = Pick<CastMember, "name" | "role" | "description" | "importance" | "source">;
 const button = "rounded border-2 border-ink bg-white px-4 py-2 font-bold hover:bg-pop disabled:cursor-not-allowed disabled:opacity-50";
@@ -147,8 +148,9 @@ export default function CharacterStudio({ comicId, styleId, initialState }: { co
           {adding ? <AddCharacter busy={busy} act={act} onClose={() => setAdding(false)} /> : (
             <button className={button} disabled={busy || state.cast.length >= MAX_CAST_MEMBERS} onClick={() => setAdding(true)}>+ Add a character ({state.cast.length}/{MAX_CAST_MEMBERS})</button>
           )}
+          <ObjectStudio comicId={comicId} objects={state.objects ?? []} busy={busy} act={act} onDirty={changed} />
           <section className="comic-box space-y-3 bg-white p-6 text-center">
-            <p className="font-bold">{state.ready ? "Your cast is ready." : "Approve every main and supporting character to continue."}</p>
+            <p className="font-bold">{state.ready ? "Your cast is ready." : `Approve these designs to continue: ${missingApprovals(state.cast ?? [], state.objects ?? []).join(", ")}.`}</p>
             {(unsaved.length > 0 || adding) && <p className="text-sm text-neutral-600">Save or cancel your character edits before continuing.</p>}
             <button className="comic-box bg-zap px-8 py-3 font-title text-3xl tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50" disabled={busy || !state.ready || unsaved.length > 0 || adding} onClick={startComic}>
               {starting ? "Starting…" : COPY.characters.continue}
@@ -290,8 +292,19 @@ function CharacterCard({ member, comicId, busy, act, onDirty, onError }: { membe
         </>}
         {remaining > 0 && <button className={member.design ? button : `${button} bg-pop`} disabled={busy || dirty || (member.source === "photos" && (member.photos.length === 0 || member.photoCheck?.verdict === "unusable"))} onClick={() => design()}>{member.design ? "Draw a revised look" : member.source === "photos" ? "Design from my photos" : "✨ Design this character"}</button>}
         <p className="text-xs text-neutral-600">{remaining > 0 ? `${remaining} of ${MAX_DESIGN_ATTEMPTS} designs remaining. A design takes about ${ESTIMATES.characterDesign} seconds. Failed requests don't use an attempt.` : "All six designs used. You can still approve the current look."}</p>
-        {member.wardrobe && <p className="rounded bg-paper p-2 text-xs text-neutral-700">👕 Outfits change with each scene (school, work, wedding…); the design shows who {member.name} is. Typical wardrobe: {member.wardrobe}</p>}
+        {member.wardrobe && (member.lookPolicy ?? "story") === "story" && <p className="rounded bg-paper p-2 text-xs text-neutral-700">👕 Outfits change with each scene (school, work, wedding…); the design shows who {member.name} is. Typical wardrobe: {member.wardrobe}</p>}
       </div>}
+      {member.design?.approved && <fieldset disabled={busy || dirty} className="space-y-2 rounded border-2 border-ink bg-paper p-4">
+        <legend className="font-bold">How should we handle this character’s look?</legend>
+        {([
+          ["keep", "Keep this look", "Preserve the approved outfit, hair, and accessories within each life stage."],
+          ["story", "Dress for the story — Recommended", "Preserve identity while adapting clothing to the scene."],
+          ["ask", "Ask me for big changes", "Keep the approved look until you approve a proposed change."],
+        ] as const).map(([value, label, help]) => <label key={value} className="flex items-start gap-2 text-sm">
+          <input type="radio" name={`look-${member.id}`} value={value} checked={(member.lookPolicy ?? "story") === value} onChange={() => act({ action: "look-policy", memberId: member.id, policy: value as LookPolicy })} />
+          <span><strong>{label}</strong><span className="block text-neutral-600">{help}</span></span>
+        </label>)}
+      </fieldset>}
       {needsDesign(member) && <LifeStages member={member} comicId={comicId} busy={busy || dirty || !!working} act={act} />}
       {confirmRemove ? <div className="flex flex-wrap items-center gap-2 border-t-2 border-neutral-200 pt-3">
         <span className="text-sm">Remove {member.name} from the cast?</span>
