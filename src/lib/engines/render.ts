@@ -882,6 +882,46 @@ function luminanceOf(color: string): number {
   return ((n >> 16) & 255) * 0.3 + ((n >> 8) & 255) * 0.59 + (n & 255) * 0.11;
 }
 
+/** Brightness (0–255) of up to ~4000 pixels behind a region, so mixed backgrounds (half red, half yellow) are judged part by part. */
+function regionBrightness(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): number[] {
+  const t = ctx.getTransform();
+  const px = Math.max(0, Math.floor(x * t.a + t.e));
+  const py = Math.max(0, Math.floor(y * t.d + t.f));
+  const pw = Math.max(1, Math.min(ctx.canvas.width - px, Math.ceil(w * t.a)));
+  const ph = Math.max(1, Math.min(ctx.canvas.height - py, Math.ceil(h * t.d)));
+  try {
+    const data = ctx.getImageData(px, py, pw, ph).data;
+    const step = Math.max(4, Math.floor(data.length / 4 / 4000)) * 4;
+    const out: number[] = [];
+    for (let i = 0; i < data.length; i += step) out.push(data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11);
+    return out;
+  } catch {
+    return []; // e.g. a tainted canvas: unknown art, so the caller plays safe.
+  }
+}
+
+/**
+ * The title must read everywhere it sits, not just on average. The art behind it is sampled
+ * point by point against the title colour (within 80 brightness points counts as "swallowed"):
+ * - 8% or more swallowed (a few letters over a red ray, white over a yellow patch): keep the
+ *   art director's colour but add a thick outline in whichever of white / near-black contrasts
+ *   with the fill, plus a shadow: the comic-lettering way to sit colour on colour.
+ * - 35% or more: the colour itself can't work here; letter in white or near-black, whichever
+ *   contrasts with the art, with the opposite outline.
+ * Font, size, position and tilt always stay as art-directed.
+ */
+function readableTitleColours(behind: number[], fill: string, outline: string): { fill: string; outline: string; weak: boolean } {
+  if (behind.length === 0) return { fill: "#ffffff", outline: "#111111", weak: true };
+  const fillL = luminanceOf(fill);
+  const swallowed = behind.filter((l) => Math.abs(l - fillL) < 80).length / behind.length;
+  if (swallowed < 0.08) return { fill, outline, weak: false };
+  if (swallowed >= 0.35) {
+    const darkArt = behind.filter((l) => l < 128).length / behind.length >= 0.5;
+    return darkArt ? { fill: "#ffffff", outline: "#111111", weak: true } : { fill: "#111111", outline: "#ffffff", weak: true };
+  }
+  return { fill, outline: fillL < 128 ? "#ffffff" : "#111111", weak: true };
+}
+
 const SIZE_STEPS: Record<NonNullable<CoverDesign["titleSize"]>, { max: number; min: number; width: number }> = {
   huge: { max: 250, min: 110, width: 1 },
   large: { max: 190, min: 90, width: 0.86 },
@@ -933,6 +973,7 @@ export function drawCover(
 
   const design = script.cover?.design;
   const t = titleStyle(design);
+  const titleHidden = !!script.coverTitleHidden;
   const family = fonts.cover[t.font] ?? fonts.title;
   const contentW = PAGE_W - COVER_MARGIN * 2;
   const steps = SIZE_STEPS[t.size];
@@ -985,12 +1026,13 @@ export function drawCover(
   const anchorX = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN : PAGE_W / 2;
   const blockLeft = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN - blockW : (PAGE_W - blockW) / 2;
 
-  // If the art behind the title would swallow it, add an outline and shadow automatically.
-  const behind = regionLuminance(ctx, blockLeft, titleTop, blockW, blockH);
-  const weakContrast = Math.abs(behind - luminanceOf(t.fill)) < 70;
+  // If the art behind any part of the title would swallow it, switch to colours that read, plus an outline and shadow.
+  const colours = t.treatment === "band" ? { fill: t.fill, outline: t.outline, weak: false } : readableTitleColours(regionBrightness(ctx, blockLeft, titleTop, blockW, blockH), t.fill, t.outline);
+  const weakContrast = colours.weak;
   const treatment = weakContrast && (t.treatment === "solid" || t.treatment === "hollow" || t.treatment === "stacked") ? "shadow" : t.treatment;
 
   ctx.save();
+  if (titleHidden) ctx.globalAlpha = 0;
   if (t.rotation) {
     const cx = blockLeft + blockW / 2;
     const cy = titleTop + blockH / 2;
@@ -1016,13 +1058,13 @@ export function drawCover(
       ctx.shadowOffsetY = line.size * 0.04;
     }
     if (treatment === "outline" || treatment === "hollow" || weakContrast) {
-      ctx.strokeStyle = treatment === "hollow" ? t.fill : t.outline;
-      ctx.lineWidth = line.size * (treatment === "hollow" ? 0.045 : 0.07);
+      ctx.strokeStyle = treatment === "hollow" ? colours.fill : colours.outline;
+      ctx.lineWidth = line.size * (treatment === "hollow" ? 0.045 : weakContrast ? 0.09 : 0.07);
       ctx.strokeText(line.text, anchorX, y);
     }
     ctx.restore();
     if (treatment !== "hollow") {
-      ctx.fillStyle = t.fill;
+      ctx.fillStyle = colours.fill;
       ctx.fillText(line.text, anchorX, y);
     }
     y += lineGap(line.size);
@@ -1075,8 +1117,8 @@ export function drawCover(
   const tw = block.width + padX * 2;
   const th = block.height + padY * 2;
   const tx = t.align === "left" ? COVER_MARGIN : t.align === "right" ? PAGE_W - COVER_MARGIN - tw : (PAGE_W - tw) / 2;
-  // Title at the bottom: tagline just above it. Otherwise: the foot of the page, clear of the publisher mark.
-  const ty = t.position === "bottom" ? Math.max(COVER_MARGIN, titleTop - 36 - th) : PAGE_H - COVER_MARGIN - 70 - th;
+  // Title at the bottom: tagline just above it. Otherwise (or with the title hidden): the foot of the page, clear of the publisher mark.
+  const ty = t.position === "bottom" && !titleHidden ? Math.max(COVER_MARGIN, titleTop - 36 - th) : PAGE_H - COVER_MARGIN - 70 - th;
   const light = regionLuminance(ctx, tx, ty, tw, th) > 140;
   ctx.fillStyle = light ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.6)";
   ctx.beginPath();

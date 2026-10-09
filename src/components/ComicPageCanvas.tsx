@@ -32,9 +32,12 @@ type Props = {
   onSave?: () => void;
   /** Redraw this picture with a requested change (used for the cover). */
   onRedraw?: (feedback: string) => void;
+  /** Cover only: whether the title is lettered, and a free toggle for it. */
+  titleHidden?: boolean;
+  onToggleTitle?: () => void;
 };
 
-export default function ComicPageCanvas({ script, style, which, keys, images, statuses, drawingSince = [], errors, onRetry, onSave, onRedraw }: Props) {
+export default function ComicPageCanvas({ script, style, which, keys, images, statuses, drawingSince = [], errors, onRetry, onSave, onRedraw, titleHidden, onToggleTitle }: Props) {
   const [redrawing, setRedrawing] = useState(false);
   const [feedback, setFeedback] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -147,6 +150,11 @@ export default function ComicPageCanvas({ script, style, which, keys, images, st
           {onRedraw && allReady && (
             <button type="button" onClick={() => setRedrawing(true)} className="ml-3 font-bold underline hover:text-ink">
               ✏️ Redraw
+            </button>
+          )}
+          {onToggleTitle && allReady && (
+            <button type="button" onClick={onToggleTitle} className="ml-3 font-bold underline hover:text-ink">
+              {titleHidden ? "Show title" : "Hide title"}
             </button>
           )}
         </span>

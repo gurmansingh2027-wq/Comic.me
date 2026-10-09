@@ -18,7 +18,7 @@ export function comicRevision(comic: Comic): string {
 }
 export function pageRevision(comic: Comic, page: string): string {
   const keys = page === "cover" ? ["cover"] : comic.script?.pages[Number(page) - 1]?.panels.map((_, i) => `${page}-${i + 1}`) ?? [];
-  return digest(JSON.stringify({ art: artRevision(comic), content: page === "cover" ? [comic.script?.title, comic.script?.tagline, comic.script?.cover] : comic.script?.pages[Number(page) - 1], pictures: keys.map(key => comic.qa?.pictures[key]?.accepted?.digest) }));
+  return digest(JSON.stringify({ art: artRevision(comic), content: page === "cover" ? [comic.script?.title, comic.script?.tagline, comic.script?.cover, comic.script?.coverTitleHidden ?? false] : comic.script?.pages[Number(page) - 1], pictures: keys.map(key => comic.qa?.pictures[key]?.accepted?.digest) }));
 }
 export function exportReady(comic: Comic): boolean {
   if (!comic.qa?.version) return true;
