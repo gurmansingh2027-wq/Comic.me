@@ -52,7 +52,8 @@ Compare the generated picture against the storyboard intent, the Continuity Ledg
 - Soft (note, don't fail): small background differences, lighting variation, unimportant passers-by, texture changes, tiny details you can't make out. Camera framing may vary if the same action and story beat remain clear. A wider view of the same action is NOT SCENE_MISMATCH; reserve that hard class for a different or missing narrative event. Simplified compositions intentionally change framing.
 - Night lighting may darken a colour but must not change its hue: a white car can look blue-grey in shadow, never yellow, orange, green or black under even light.
 - Only judge what is visible. Don't fail a livery that's on the side we can't see; do fail one that should be visible and isn't.
-- If you're unsure, say so with low confidence rather than guessing.
+- Confidence is about your verdict on what is VISIBLE. If you examined everything visible and found nothing wrong, that is high confidence: never lower it because something is hidden, off-frame, stylised or small. Use medium when a required detail is genuinely ambiguous at this size, and low only when the image is too unclear to judge at all.
+- Only report a failure you can point at. An extra person or prop the storyboard doesn't list is UNPLANNED_ELEMENT (soft) unless it is a named character who shouldn't be there twice or at all.
 
 Failure classes:
 ${failureGuide()}`;
@@ -133,18 +134,23 @@ export function maxAttempts(complexity: Complexity): number {
 
 export function hardFailures(verdict: PanelVerdict): FailureClass[] {
   const failures = verdict.failures.map((f) => f.failure).filter(isHard);
-  if (!failures.length && verdict.checks.some(check => check.status === "fail")) failures.push("SCENE_MISMATCH");
+  // A failed beat check is a hard failure even without a named class; other failed dimensions are soft.
+  if (!failures.length && verdict.checks.some(check => check.status === "fail" && (check.dimension === "SCENE_MATCH" || check.dimension === "ACTION_MATCH"))) failures.push("SCENE_MISMATCH");
   return failures;
 }
 
 /**
  * Turns a verdict into an action. Correctness beats ambition: repeated hard failures switch to
  * the simpler safe shot before giving up, and nothing with a hard failure is silently accepted.
+ * Anything less than high confidence gets one careful (high-effort) second look; after that a
+ * clean picture is accepted unless the inspector still can't judge it at all (low), and concrete
+ * hard failures are acted on. Soft findings never block.
  */
 export function decide({ verdict, attempt, complexity, hasSafeShot, escalated }: { verdict: PanelVerdict; attempt: number; complexity: Complexity; hasSafeShot: boolean; escalated: boolean }): Decision {
   const hard = hardFailures(verdict);
-  if (verdict.confidence !== "high") return escalated ? "flag" : "escalate";
-  if (hard.length === 0 && !verdict.checks.some(check => check.status === "fail")) return "accept";
+  if (verdict.confidence !== "high" && !escalated) return "escalate";
+  if (hard.length === 0) return verdict.confidence === "low" ? "flag" : "accept";
+  if (verdict.confidence === "low") return "flag";
   const limit = maxAttempts(complexity);
   if (attempt >= limit) return "flag";
   // The last attempt (or the second, for risky shots that already failed once) uses the safe shot.
