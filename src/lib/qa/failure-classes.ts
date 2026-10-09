@@ -20,6 +20,7 @@ export const FAILURE_CLASSES = {
   OBJECT_IDENTITY_DRIFT: { severity: "hard", label: "A recurring important object changed design" },
   // Physics and space
   OCCUPANT_CLIPPING: { severity: "hard", label: "A person clips through a vehicle, or is physically outside it when they should be inside" },
+  SCALE_FAILURE: { severity: "hard", label: "A person or vehicle is the wrong size for the scene (a driver bigger than the cabin, a standing adult far taller or shorter than about 1.3-1.5x a car's height)" },
   IMPOSSIBLE_POSE: { severity: "hard", label: "Impossible body position, broken anatomy or a driver facing an implausible direction" },
   VEHICLE_GEOMETRY_FAILURE: { severity: "hard", label: "A vehicle's geometry is broken (melted body, wheels misaligned, impossible shape)" },
   ROAD_GEOMETRY_FAILURE: { severity: "hard", label: "Roads, lanes or junctions are physically impossible, or a vehicle is off-road without a story reason" },

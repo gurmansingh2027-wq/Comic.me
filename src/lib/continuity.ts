@@ -12,6 +12,7 @@
 
 import type { CanonObject, CastMember, Complexity, ComicScript, LookPolicy, Motion, Panel, PanelCast } from "./comic";
 import type { FailureClass } from "./qa/failure-classes";
+import { physicsConflicts } from "./vehicle-physics";
 
 export type LedgerPerson = {
   name: string;
@@ -237,7 +238,7 @@ export function buildLedger(
       const complexity = maxComplexity(panel.complexity ?? "low", ruleComplexity(panel, people, ledgerObjects, kinds));
       if (complexity !== panel.complexity) panel.complexity = complexity;
 
-      entries.push({
+      const entry: LedgerEntry = {
         key,
         pageIndex: p,
         panelIndex: i,
@@ -248,7 +249,12 @@ export function buildLedger(
         motion: context.motion,
         complexity,
         continuesFrom: continuous ? previous!.key : undefined,
-      });
+      };
+      entries.push(entry);
+      // Contradiction check: a pose that's impossible at this speed is drawn from inside the cabin instead.
+      for (const conflict of physicsConflicts(panel, entry)) {
+        issues.push({ key, failure: "IMPOSSIBLE_POSE", severity: "soft", message: `${conflict.person} "${conflict.pose}" while the car is ${conflict.speed}: it will be drawn from inside the cabin. To keep it, stop or slow the car in this panel.`, fixed: true });
+      }
       previous = { key, location: norm(context.location), event: norm(context.event), period: norm(context.period), time: norm(context.timeOfDay), sequence: context.sequence, people };
       return panel;
     }),
