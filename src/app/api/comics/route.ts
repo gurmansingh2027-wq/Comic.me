@@ -44,7 +44,7 @@ export async function POST(request: Request) {
       intake,
       preset,
       status: "draft",
-      qa: { version: 1, pictures: {} },
+      qa: { version: 1, revisions: 2, pictures: {} },
     };
     const interview = await takeInterviewCosts(interviewSession(body.session));
     if (interview.length > 0) addCost(comic, "interview", `${interview.length} voice & AI calls`, interview);

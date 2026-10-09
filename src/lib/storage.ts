@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { IMAGE_KEY_PATTERN, type Comic, type ComicScript } from "./comic";
+import { migrateQaRevisions } from "./qa/state";
 
 // v1 keeps comics on the local disk under storage/comics/<id>/.
 // Later this module can be swapped for Supabase / Cloudflare R2 without touching the rest of the app.
@@ -64,7 +65,7 @@ export async function loadComic(id: string): Promise<Comic | null> {
   if (data.script && "panels" in data.script) {
     return upgradeLegacyComic(data as LegacyComic);
   }
-  return data;
+  return migrateQaRevisions(data);
 }
 
 /** Every saved comic (used by the Explore page; fine for a local prototype, a database query later). */

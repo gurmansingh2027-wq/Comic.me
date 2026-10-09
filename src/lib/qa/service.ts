@@ -9,7 +9,7 @@ import { metered } from "../meter";
 import { castRefsFor, ledgerFor, objectRefsFor, qaReferences } from "../picture-context";
 import { loadComic, loadImage, loadQaFile, saveComic, saveQaFile, withComicLock } from "../storage";
 import { getStyle } from "../styles";
-import { artRevision, comicRevision, exportReady, pageRevision } from "./state";
+import { comicRevision, exportReady, pageRevision, pictureRevisions } from "./state";
 import { checkSequence, contactSheet, sequenceBlockers, sequenceFacts, type QaReference, type SequenceVerdict } from "./visual-qa";
 
 const globalQa = globalThis as typeof globalThis & { qaFlights?: Map<string, Promise<unknown>> };
@@ -28,13 +28,13 @@ async function requireComic(id: string, revision?: string): Promise<Comic> {
 }
 export function qaStatus(comic: Comic) {
   const revision = comicRevision(comic);
-  const art = artRevision(comic);
+  const art = pictureRevisions(comic);
   const { entries } = comic.script ? ledgerFor(comic) : { entries: [] };
   const pages = [...(comic.script?.cover ? ["cover"] : []), ...(comic.script?.pages.map((_, p) => String(p + 1)) ?? [])];
   return {
     required: comic.qa?.version === 1, revision, ready: exportReady(comic),
     dependencies: Object.fromEntries(entries.filter(e => e.continuesFrom).map(e => [e.key, e.continuesFrom])),
-    pictures: Object.fromEntries(Object.entries(comic.qa?.pictures ?? {}).map(([key, record]) => [key, { status: record.status, accepted: record.accepted?.revision === art, digest: record.accepted?.digest, attempts: record.attempts, notes: record.notes }])),
+    pictures: Object.fromEntries(Object.entries(comic.qa?.pictures ?? {}).map(([key, record]) => [key, { status: record.status, accepted: record.accepted?.revision === art[key], digest: record.accepted?.digest, attempts: record.attempts, notes: record.notes }])),
     pages: Object.fromEntries(pages.map(page => { const check = comic.qa?.pages?.[page]; return [page, check?.revision === pageRevision(comic, page) ? check : null]; })),
     final: comic.qa?.final,
     open: openFindings(comic),
@@ -98,7 +98,8 @@ export async function checkPage(id: string, revision: string, page: string, data
     if (!keys?.length) throw new UserFacingError("Page not found.", 404);
     const targetRevision = pageRevision(comic, page);
     if (comic.qa.pages?.[page]?.revision === targetRevision && comic.qa.pages[page].status === "accepted") return qaStatus(comic);
-    if (keys.some(key => comic.qa!.pictures[key]?.accepted?.revision !== artRevision(comic))) throw new UserFacingError("Finish checking the pictures first.", 409);
+    const revisions = pictureRevisions(comic);
+    if (keys.some(key => comic.qa!.pictures[key]?.accepted?.revision !== revisions[key])) throw new UserFacingError("Finish checking the pictures first.", 409);
     const metadata = await sharp(data, { limitInputPixels: 16_000_000 }).metadata();
     if (metadata.width !== 1600 || metadata.height !== 2400) throw new UserFacingError("Send the full rendered page.", 400);
     const image = await sharp(data).jpeg({ quality: 90 }).toBuffer();
@@ -180,5 +181,6 @@ export async function checkFinal(id: string, revision: string) {
   });
 }
 function digestPair(comic: Comic, keys: string[]) {
-  return `${artRevision(comic)}:${keys.map(key => comic.qa?.pictures[key]?.accepted?.digest).join(":")}`;
+  const revisions = pictureRevisions(comic);
+  return keys.map(key => `${revisions[key]}/${comic.qa?.pictures[key]?.accepted?.digest}`).join(":");
 }
