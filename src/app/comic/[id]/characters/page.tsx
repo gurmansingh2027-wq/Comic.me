@@ -9,6 +9,6 @@ export default async function CharactersPage(props: PageProps<"/comic/[id]/chara
   const { id } = await props.params;
   const comic = await loadComic(id);
   if (!comic) notFound();
-  if (comic.status !== "draft") redirect(`/comic/${id}`);
+  if (comic.status !== "draft") redirect(`/comic/${id}/storyboard`);
   return <CharacterStudio comicId={id} styleId={comic.styleId} initialState={await castService.read(id)} />;
 }

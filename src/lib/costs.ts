@@ -59,11 +59,12 @@ export function imageCost(model: string, size: string, quality: string, referenc
 }
 
 /** What the browser needs to estimate drawing costs on the storyboard. */
-export type PicturePricing = { base: number; perReference: number };
+export type PicturePricing = { base: number; perReference: number; /** Extra for a hero panel (higher quality, bigger). */ heroExtra: number };
 
-export function picturePricing(model: string, quality: string): PicturePricing {
+export function picturePricing(model: string, quality: string, heroQuality = quality): PicturePricing {
   const base = imageCost(model, "1024x1024", quality, 0);
-  return { base, perReference: imageCost(model, "1024x1024", quality, 1) - base };
+  const hero = imageCost(model, "1296x1296", heroQuality, 0);
+  return { base, perReference: imageCost(model, "1024x1024", quality, 1) - base, heroExtra: Math.max(0, hero - base) };
 }
 
 // Voice interview (OpenAI): transcription is billed per minute of audio, speech per minute spoken.
@@ -102,7 +103,7 @@ export function drawingCost(script: ComicScript, pricing: PicturePricing): numbe
   const picture = (people: number) => pricing.base + Math.min(people, 4) * pricing.perReference;
   const panels = script.pages.flatMap((page) => page.panels);
   const cover = script.cover ? picture(script.characters.length) : 0;
-  return cover + panels.reduce((sum, panel) => sum + picture(panel.context?.cast.length ?? 1), 0);
+  return cover + panels.reduce((sum, panel) => sum + picture(panel.context?.cast.length ?? 1) + (panel.hero ? pricing.heroExtra ?? 0 : 0), 0);
 }
 
 const PRICE_FOR: Record<CostItem, number> = {

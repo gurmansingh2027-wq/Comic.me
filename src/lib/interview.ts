@@ -3,7 +3,12 @@
 export type InterviewTurn = { role: "ai" | "user"; text: string };
 
 export const INTERVIEW_GREETING =
-  "Hi! I'm your Comic.me storyteller. Tell me the story you'd like to turn into a comic: who's it about, and what happened? Just talk like you're telling a friend.";
+  "Hey! I'm your Comic.me storyteller. What's the story? Who's in it, and what happened? Talk like you're telling a friend; I'll ask about the good bits.";
+
+/** Recreate from Explore: the format is chosen, so we go straight to the person's own story. */
+export function recreateGreeting(title: string): string {
+  return `Good taste. We'll borrow the format of "${title}" (style, page rhythm, cover approach), but none of its story. So: what's your story? Who's it about, and what happened?`;
+}
 
 /** Guards so one conversation can't run up a big bill. */
 export const MAX_TURNS = 40;

@@ -13,6 +13,7 @@ const KINDS: { kind: BalloonKind; label: string }[] = [
   { kind: "shout", label: "🗯 Shout" },
   { kind: "whisper", label: "🤫 Whisper" },
   { kind: "thought", label: "💭 Thought" },
+  { kind: "robot", label: "🤖 Robot" },
 ];
 const small = "rounded border-2 border-ink bg-white px-2 py-1 text-xs font-bold hover:bg-pop disabled:opacity-40";
 
@@ -45,14 +46,16 @@ export default function ComicPageEditor(props: Props) {
     onChangePanel(ref.panel, (panel) =>
       ref.ref === "caption"
         ? { ...panel, captionPos: pos ?? undefined }
-        : { ...panel, dialogue: panel.dialogue.map((line, k) => (k === ref.ref ? { ...line, pos: pos ?? undefined } : line)) },
+        : ref.ref === "sfx"
+          ? { ...panel, sfxPos: pos ?? undefined }
+          : { ...panel, dialogue: panel.dialogue.map((line, k) => (k === ref.ref ? { ...line, pos: pos ?? undefined } : line)) },
     );
   }
   const setLine = (panelIndex: number, l: number, patch: Partial<DialogueLine>) =>
     onChangePanel(panelIndex, (panel) => ({ ...panel, dialogue: panel.dialogue.map((line, k) => (k === l ? { ...line, ...patch } : line)) }));
 
   const selectedPanel = selected ? page.panels[selected.panel] : null;
-  const selectedLine = selected && selected.ref !== "caption" ? selectedPanel?.dialogue[selected.ref] : null;
+  const selectedLine = selected && typeof selected.ref === "number" ? selectedPanel?.dialogue[selected.ref] : null;
 
   return (
     <figure className="space-y-2">
@@ -152,13 +155,22 @@ export default function ComicPageEditor(props: Props) {
         <div className="space-y-2 rounded border-3 border-ink bg-white p-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-bold">
-              {selected.ref === "caption" ? "Caption" : `${selectedLine?.speaker ?? "Balloon"} says`} · panel {selected.panel + 1}
+              {selected.ref === "caption" ? "Caption" : selected.ref === "sfx" ? "Sound effect" : `${selectedLine?.speaker ?? "Balloon"} says`} · panel {selected.panel + 1}
             </p>
             <button type="button" onClick={() => setSelected(null)} className={small}>
               Done
             </button>
           </div>
-          {selected.ref === "caption" ? (
+          {selected.ref === "sfx" ? (
+            <input
+              value={selectedPanel.sfx ?? ""}
+              onChange={(event) => onChangePanel(selected.panel, (panel) => ({ ...panel, sfx: event.target.value }))}
+              maxLength={40}
+              autoFocus
+              placeholder="e.g. KRAK!"
+              className="w-full rounded border-2 border-ink px-2 py-1.5 text-sm"
+            />
+          ) : selected.ref === "caption" ? (
             <textarea
               value={selectedPanel.caption}
               onChange={(event) => onChangePanel(selected.panel, (panel) => ({ ...panel, caption: event.target.value }))}

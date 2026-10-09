@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addCost } from "@/lib/costs";
-import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, remixPresetFor, type Comic, type Intake } from "@/lib/comic";
+import { MAX_STORY_LENGTH, MIN_STORY_LENGTH, onExplore, remixPresetFor, type Comic, type Intake } from "@/lib/comic";
 import { isValidTranscript } from "@/lib/interview";
 import { errorResponse, UserFacingError } from "@/lib/errors";
 import { interviewSession, takeInterviewCosts } from "@/lib/interview-costs";
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
         : undefined;
     // Recreate: copy only the published comic's format, never its content.
     const source = typeof body.presetId === "string" ? await loadComic(body.presetId) : null;
-    const preset = source?.explore?.published ? remixPresetFor(source) ?? undefined : undefined;
+    const preset = source && onExplore(source) ? remixPresetFor(source) ?? undefined : undefined;
     const comic: Comic = {
       id: randomUUID(),
       createdAt: now,

@@ -4,6 +4,8 @@
 // (to pick each panel's shape) and the renderer (to draw the page).
 
 export type Rect = { x: number; y: number; w: number; h: number };
+/** A point in grid units, for panels with slanted edges. */
+export type Point = [number, number];
 
 export const GRID_COLS = 12;
 export const GRID_ROWS = 18;
@@ -21,13 +23,32 @@ export const LAYOUT_IDS = [
   "five",
   "grid-6",
   "staggered-6",
+  "slash-2",
+  "diagonal-3",
+  "zigzag-4",
+  "inset",
 ] as const;
 
 export type LayoutId = (typeof LAYOUT_IDS)[number];
 
-type Layout = { description: string; panels: Rect[] };
+/**
+ * A panel's frame: its bounding rectangle, plus a convex outline for slanted panels and an
+ * `inset` flag for small panels drawn on top of a bigger one.
+ */
+export type PanelFrame = Rect & { shape?: Point[]; inset?: boolean };
 
-const r = (x: number, y: number, w: number, h: number): Rect => ({ x, y, w, h });
+type Layout = { description: string; panels: PanelFrame[]; /** Used sparingly: only when story and style call for it. */ dynamic?: boolean };
+
+const r = (x: number, y: number, w: number, h: number): PanelFrame => ({ x, y, w, h });
+
+/** A slanted panel from its outline; the bounding rectangle is worked out for the art. */
+function poly(...shape: Point[]): PanelFrame {
+  const xs = shape.map(([x]) => x);
+  const ys = shape.map(([, y]) => y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y, shape };
+}
 
 export const LAYOUTS: Record<LayoutId, Layout> = {
   splash: {
@@ -78,6 +99,32 @@ export const LAYOUTS: Record<LayoutId, Layout> = {
     description: "6 panels of varied widths. Lively back-and-forth, energetic pacing.",
     panels: [r(0, 0, 7, 6), r(7, 0, 5, 6), r(0, 6, 5, 6), r(5, 6, 7, 6), r(0, 12, 7, 6), r(7, 12, 5, 6)],
   },
+  // Dynamic layouts: slanted borders and insets, for action, comedy and big turns. Use sparingly.
+  "slash-2": {
+    description: "2 panels split by a steep diagonal. A clash, a before/after, a sudden turn.",
+    panels: [poly([0, 0], [12, 0], [12, 7], [0, 11]), poly([0, 11], [12, 7], [12, 18], [0, 18])],
+    dynamic: true,
+  },
+  "diagonal-3": {
+    description: "3 bands with slanted borders. Momentum: a chase, a fall, a race against time.",
+    panels: [poly([0, 0], [12, 0], [12, 5], [0, 7]), poly([0, 7], [12, 5], [12, 11], [0, 13]), poly([0, 13], [12, 11], [12, 18], [0, 18])],
+    dynamic: true,
+  },
+  "zigzag-4": {
+    description: "Slanted top strip, 2 panels split diagonally, slanted bottom strip. Explosive, pop-comic energy.",
+    panels: [
+      poly([0, 0], [12, 0], [12, 4], [0, 6]),
+      poly([0, 6], [7, 4.83], [5, 12.17], [0, 13]),
+      poly([7, 4.83], [12, 4], [12, 11], [5, 12.17]),
+      poly([0, 13], [12, 11], [12, 18], [0, 18]),
+    ],
+    dynamic: true,
+  },
+  inset: {
+    description: "A full-page image with a small inset panel on top (a reaction, a detail, a close-up).",
+    panels: [r(0, 0, 12, 18), { ...r(6.6, 11.6, 4.8, 5.8), inset: true }],
+    dynamic: true,
+  },
 };
 
 /** Used when the writer's panel count doesn't match the layout it picked. */
@@ -96,7 +143,14 @@ export function fitLayout(layout: LayoutId, panelCount: number): LayoutId {
 }
 
 export function layoutMenu(): string {
-  return LAYOUT_IDS.map((id) => `- "${id}" (${LAYOUTS[id].panels.length} panels): ${LAYOUTS[id].description}`).join("\n");
+  return LAYOUT_IDS.map((id) => `- "${id}" (${LAYOUTS[id].panels.length} panels${LAYOUTS[id].dynamic ? ", dynamic" : ""}): ${LAYOUTS[id].description}`).join("\n");
+}
+
+/** Extra note for the artist when a panel isn't a plain rectangle. */
+export function frameNote(frame: PanelFrame): string | false {
+  if (frame.inset) return "This is a small inset panel drawn over a bigger image: keep it simple and bold, one clear subject.";
+  if (frame.shape) return "This panel has slanted edges and its corners will be cut diagonally: keep faces and the key action in the central area.";
+  return false;
 }
 
 export function panelAspect(rect: Rect): number {
@@ -112,12 +166,11 @@ export function describeShape(aspect: number): string {
 }
 
 /**
- * Image size to request for a panel of the given shape: about one megapixel,
+ * Image size to request for a panel of the given shape: about one megapixel (more for hero panels),
  * both sides multiples of 16, aspect ratio kept between 1:3 and 3:1.
  */
-export function imageSizeForAspect(aspect: number): string {
+export function imageSizeForAspect(aspect: number, pixels = 1024 * 1024): string {
   const clamped = Math.min(Math.max(aspect, 1 / 3), 3);
-  const pixels = 1024 * 1024;
   const round16 = (n: number) => Math.max(16, Math.round(n / 16) * 16);
   const width = round16(Math.sqrt(pixels * clamped));
   const height = round16(Math.sqrt(pixels / clamped));

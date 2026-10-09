@@ -6,7 +6,8 @@ import { askClaude, imageBlock } from "../claude";
 import type { CastMember, Intake, PhotoVerdict } from "../comic";
 import { UserFacingError } from "../errors";
 import type { ComicStyle } from "../styles";
-import { IMAGE_MODEL, imageClient, imageQuality, recordImageUsage, referenceFile, withRateLimitRetry } from "./art";
+import { recordUsage } from "../meter";
+import { fakeImage, fakeImagesEnabled, IMAGE_MODEL, imageClient, imageQuality, recordImageUsage, referenceFile, withRateLimitRetry } from "./art";
 
 // Character Engine: decides who needs a design, checks reference photos, draws character
 // designs in the comic's style, and describes approved designs so every panel matches them.
@@ -16,9 +17,14 @@ export const DESIGN_SIZE = "1536x1024";
 // --- Who's in the story -------------------------------------------------------------------------
 
 const StageSchema = z.object({
-  label: z.string().describe('Short label, e.g. "Child (age 8)", "College (19-21)", "Wedding day (28)"'),
-  ageRange: z.string().describe('e.g. "7-10"'),
-  look: z.string().describe("How they look at this age: height, build, face, hair at the time"),
+  label: z.string().describe('Short label for the life chapter, e.g. "Childhood", "College", "Wedding day", "Founder years"'),
+  ageRange: z.string().describe('Approximate age, e.g. "8", "19-21", "35"'),
+  look: z
+    .string()
+    .describe(
+      "How they look at this age, concretely different from other ages: height and body proportions (a child is small with a bigger head and short limbs), facial maturity, hairstyle AT THE TIME, facial hair, glasses/braces/accessories of that period",
+    ),
+  outfit: z.string().describe("What they typically wear in this chapter of life, fitting the age, era, place and culture (e.g. school uniform, hostel T-shirt and jeans, office shirt)"),
 });
 
 const CastSchema = z.object({
@@ -37,7 +43,7 @@ const CastSchema = z.object({
       mainStage: StageSchema.describe("The age at which they appear MOST in the story; their main design is drawn at this age"),
       otherStages: z
         .array(StageSchema)
-        .describe("Other ages they visibly appear at, ONLY if the story spans years (childhood, college, ten years later). Usually empty."),
+        .describe("Other ages they visibly appear at, in story order, ONLY when the story spans years (they met as kids, reunited in college, married later…). Empty when everything happens within a few years."),
       wardrobe: z
         .string()
         .describe("What they typically wear in different situations (work, home, festive, sport), fitting their age, era and culture"),
@@ -54,13 +60,13 @@ From the story (and the interviewer's notes), list every person who will appear 
 
 Identity is what keeps someone recognisable in any outfit, at any age and in any art style: face, skin, hair, build and distinctive markers. Clothes are NOT identity; put clothing in "wardrobe" instead, because people change clothes with the scene (school uniform as a kid, casual at college, a sherwani at their wedding, a suit at work).
 
-Life stages: only when the story clearly shows someone at very different ages ("when we were kids", "ten years later", "at college", "at our wedding", "now in her 80s"). mainStage is the age they appear at most; otherStages lists the other ages, at most 3. If everything happens within a few years, otherStages must be empty. Minor characters never need stages.
+Life stages: work out the timeline yourself; never make the user explain it. Read the story for time jumps and life chapters: "when we were kids", "in Class 10", "at college", "ten years later", "at our wedding", "when I started the company", "now in her 80s", years ("in 2004… by 2019"), and implied ages (school exams, first job, retirement). If someone visibly appears in chapters that are about 5+ years apart, or in different life phases (child, teen, young adult, adult, older), each chapter is a stage. mainStage is the chapter they appear in most; otherStages lists the others in story order, at most 3. Each stage must look genuinely different (height, proportions, face, hair of the time, outfit, accessories) while staying recognisably the same person. If everything happens within a few years, otherStages must be empty. Minor characters never need stages.
 
 Where the story doesn't say how someone looks, suggest a plausible, specific look that fits their age, culture and era.`;
 
 type PlannedMember = Pick<CastMember, "name" | "role" | "importance" | "identity" | "wardrobe" | "description"> & {
   mainStage: { label: string; ageRange: string };
-  stages: { label: string; ageRange: string; look: string }[];
+  stages: { label: string; ageRange: string; look: string; outfit: string }[];
 };
 
 /** A one-paragraph description from identity + main-stage look (used in every prompt). */
@@ -127,7 +133,7 @@ export async function checkPhotos(member: CastMember, photos: Buffer[]): Promise
 // --- Character designs ----------------------------------------------------------------------------
 
 /** Which age a design is for: the main design, or one of the member's extra life stages. */
-export type DesignStage = { label: string; ageRange: string; look: string };
+export type DesignStage = { label: string; ageRange: string; look: string; outfit?: string };
 
 function designPrompt(member: CastMember, style: ComicStyle, fromPhotos: boolean, stage?: DesignStage): string {
   const age = stage ? `${stage.label}, age ${stage.ageRange}` : member.mainStage ? `${member.mainStage.label}, age ${member.mainStage.ageRange}` : "";
@@ -139,8 +145,10 @@ function designPrompt(member: CastMember, style: ComicStyle, fromPhotos: boolean
       ? `Likeness: the reference photo(s) show the real person. Draw them as an illustrated character in the art style above, fully stylised like every other character in a comic of this style (same simplification, linework, shading and proportions); never a realistic portrait or a traced photo. Keep them recognisable through face shape, distinctive features, skin tone, hair, facial hair, glasses and build.${stage ? ` Show them at this age: ${stage.look}` : ""} Details: ${appearance}`
       : `Appearance: ${appearance}`,
     stage &&
-      "Age-appropriate details only: leave out any feature that doesn't fit this age (an adult's watch, beard, glasses or jewellery on a child; a child's features on an adult). Face shape, eyes, skin tone and hair colour must stay the same person.",
-    "Outfit: one simple, typical everyday outfit for this person at this age (their clothes will change from scene to scene; this sheet is about who they are).",
+      `This is ${member.name} in a different chapter of life, and it must look like it: change the apparent age, height, body proportions (a child is small with a larger head and shorter limbs; a teen is lanky), facial maturity, hairstyle of the time, facial hair and accessories to fit age ${stage.ageRange}. Leave out anything that doesn't fit this age (an adult's watch, beard or jewellery on a child). Keep what makes them the same person: face shape, eyes, nose, skin tone, hair colour and texture, and any lifelong distinctive markers.`,
+    stage
+      ? `Outfit: ${stage.outfit?.trim() || "what they'd typically wear at this age, in this era and place"}. Do NOT reuse the outfit from the main design: the clothes, shoes and accessories belong to this chapter of life.`
+      : "Outfit: one simple, typical everyday outfit for this person at this age (their clothes will change from scene to scene; this sheet is about who they are).",
     "Layout: on the left, the full body from head to toe, standing in a relaxed, natural pose facing the viewer; on the right, a large head-and-shoulders portrait of the same character with a warm expression. Same outfit in both. Plain light background.",
     "IMPORTANT: Do not draw any text, labels, names, colour swatches, logos or watermarks.",
   ]
@@ -187,7 +195,7 @@ export async function drawDesign({
   };
   if (previousDesignPath) add(previousDesignPath, `is the current version of this design of ${member.name}`);
   if (identityDesignPath) {
-    add(identityDesignPath, `is ${member.name}'s approved main design at another age: keep exactly the same person (face, features, skin tone, hair colour, distinctive markers) and art style, just at the new age`);
+    add(identityDesignPath, `is ${member.name}'s approved main design at another age: keep the same person (face shape, features, skin tone, hair colour, distinctive markers) and the same art style, but NOT their age, height, proportions, hairstyle or clothes`);
   }
   if (fromPhotos) photoPaths.forEach((file) => add(file, `is a photo of the real ${member.name}, for likeness only`));
   if (hasSample) {
@@ -203,6 +211,10 @@ export async function drawDesign({
     .filter(Boolean)
     .join("\n\n");
 
+  if (fakeImagesEnabled()) {
+    recordUsage({ provider: "openai", model: "test-placeholder", operation: "character-design.fake", image: { size: DESIGN_SIZE, quality: "test", references: references.length }, usd: 0, measured: false });
+    return fakeImage(DESIGN_SIZE, `${member.name}${stage ? ` · ${stage.label}` : ""}`);
+  }
   const client = imageClient();
   const images = await Promise.all(references.map(referenceFile));
   let retries = 0;

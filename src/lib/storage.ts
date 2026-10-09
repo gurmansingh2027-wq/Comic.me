@@ -7,7 +7,8 @@ import { IMAGE_KEY_PATTERN, type Comic, type ComicScript } from "./comic";
 // v1 keeps comics on the local disk under storage/comics/<id>/.
 // Later this module can be swapped for Supabase / Cloudflare R2 without touching the rest of the app.
 
-const ROOT = path.join(process.cwd(), "storage", "comics");
+// COMICME_STORAGE_DIR lets tests use a separate folder, so they never touch real comics.
+const ROOT = path.join(process.env.COMICME_STORAGE_DIR || path.join(process.cwd(), "storage"), "comics");
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Shared across route bundles and development reloads in this local Node server.

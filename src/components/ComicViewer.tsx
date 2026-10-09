@@ -1,125 +1,38 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type ComicStatus, type Panel } from "@/lib/comic";
+import { countPanels, imageKeys, imageUrl, panelKey, type ComicScript, type Panel } from "@/lib/comic";
+import { COPY, pick } from "@/lib/copy";
 import { downloadComicPdf, downloadPagePng, loadImage, renderFullPage } from "@/lib/engines/render";
 import { renderFonts } from "@/lib/fonts";
 import { getStyle } from "@/lib/styles";
 import ComicPageCanvas, { type ImageStatus } from "./ComicPageCanvas";
 import ComicPageEditor from "./ComicPageEditor";
-import Countdown, { ESTIMATES, formatDuration } from "./Countdown";
+import { ESTIMATES, formatDuration } from "./Countdown";
 
 /**
  * How many pictures are drawn at the same time. Kept low because new OpenAI accounts
  * may only draw 5 images per minute; the server waits and retries when it hits that limit.
  */
 const CONCURRENCY = 3;
-const POLL_MS = 3000;
 
 type Props = {
   comicId: string;
   styleId: string;
-  initialStatus: ComicStatus;
-  initialError?: string;
-  /** When the current writing stage started (ISO time). */
-  initialSince?: string;
-  initialScript?: ComicScript;
+  script: ComicScript;
   alreadyDrawn: string[];
-  /** Whether the comic is shared on the Explore page. */
+  /** Whether the comic is on the Explore page (on by default for now). */
   initialPublished?: boolean;
 };
 
-export default function ComicViewer({ comicId, styleId, initialStatus, initialError, initialSince, initialScript, alreadyDrawn, initialPublished = false }: Props) {
+/**
+ * Step 5: draws every picture of an approved storyboard, then lets people edit the lettering.
+ * Writing and storyboard review happen on step 4; this page is only reached after approval.
+ */
+export default function ComicViewer({ comicId, styleId, script, alreadyDrawn, initialPublished = true }: Props) {
   const style = getStyle(styleId)!;
-  const router = useRouter();
-  const [status, setStatus] = useState<ComicStatus>(initialStatus);
-  const [error, setError] = useState(initialError);
-  const [script, setScript] = useState(initialScript);
-  const [since, setSince] = useState(() => (initialSince ? Date.parse(initialSince) : Date.now()));
-
-  // --- Step 1: wait for the script to be written --------------------------------------------
-  useEffect(() => {
-    if (status !== "writing" && status !== "polishing") return;
-    const timer = setInterval(async () => {
-      const response = await fetch(`/api/comics/${comicId}`).catch(() => null);
-      if (!response?.ok) return;
-      const data = await response.json();
-      // Once written, the comic goes to the storyboard for review before any drawing.
-      if (data.status === "ready" && data.stage === "storyboard") {
-        router.push(`/comic/${comicId}/storyboard`);
-        return;
-      }
-      setStatus(data.status);
-      setError(data.error);
-      if (data.since) setSince(Date.parse(data.since));
-      if (data.script) setScript(data.script);
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [comicId, status, router]);
-
-  async function retryWriting() {
-    setStatus("writing");
-    setError(undefined);
-    setSince(Date.now());
-    await fetch(`/api/comics/${comicId}`, { method: "POST" });
-  }
-
-  if (status !== "ready" || !script) {
-    return <WritingProgress status={status} error={error} since={since} onRetry={retryWriting} />;
-  }
   return <ComicDrawing comicId={comicId} script={script} style={style} alreadyDrawn={alreadyDrawn} initialPublished={initialPublished} />;
-}
-
-function WritingProgress({ status, error, since, onRetry }: { status: ComicStatus; error?: string; since: number; onRetry: () => void }) {
-  // While writing, the polish pass is still to come; while polishing, only its own time is left.
-  const estimate = status === "polishing" ? ESTIMATES.polishScript : ESTIMATES.writeScript + ESTIMATES.polishScript;
-
-  if (status === "failed") {
-    return (
-      <div className="comic-box mx-auto max-w-xl space-y-4 bg-white p-8 text-center">
-        <h1 className="font-title text-4xl tracking-wide text-zap">Our writer got stuck</h1>
-        <p>{error ?? "Something went wrong while writing your comic."}</p>
-        <div className="flex justify-center gap-3">
-          <button type="button" onClick={onRetry} className="comic-box bg-pop px-6 py-2 font-title text-2xl tracking-wide">
-            Try again
-          </button>
-          <Link href="/" className="comic-box bg-white px-6 py-2 font-title text-2xl tracking-wide">
-            Start over
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const steps = [
-    { label: "Reading your story", done: true },
-    { label: "Planning the pages and writing every panel", done: status === "polishing", active: status === "writing" },
-    { label: "Editor polishing the dialogue, art director designing the cover", done: false, active: status === "polishing" },
-    { label: "Your storyboard to review and edit", done: false },
-  ];
-  return (
-    <div className="comic-box mx-auto max-w-xl space-y-5 bg-white p-8">
-      <h1 className="text-center font-title text-4xl tracking-wide">Writing your comic…</h1>
-      <ol className="space-y-3">
-        {steps.map((step) => (
-          <li key={step.label} className={`flex items-center gap-3 text-lg ${step.done || step.active ? "" : "text-neutral-400"}`}>
-            <span className="flex h-7 w-7 items-center justify-center">
-              {step.done ? "✅" : step.active ? <span className="h-6 w-6 animate-spin rounded-full border-3 border-ink border-t-pop" /> : "⬜"}
-            </span>
-            {step.label}
-          </li>
-        ))}
-      </ol>
-      <p className="rounded border-2 border-ink bg-pop p-3 text-center text-lg font-bold">
-        ⏱ <Countdown key={`${status}-${since}`} startedAt={since} seconds={estimate} />
-      </p>
-      <p className="text-center text-sm text-neutral-600">
-        You can leave this page open, or come back to this link later.
-      </p>
-    </div>
-  );
 }
 
 // --- Step 2: draw every picture, a few at a time ----------------------------------------------
@@ -140,7 +53,7 @@ function ComicDrawing({
   // The comic's text can still be edited here (it's lettered by our code), so keep a live copy.
   const [script, setScript] = useState(initialScript);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
-  const firstRender = useRef(true);
+  const lastSaved = useRef<string | null>(null);
   // Bumped when a picture is redrawn, so the browser loads the new version.
   const [versions, setVersions] = useState<Record<string, number>>({});
   const keys = useMemo(() => imageKeys(initialScript), [initialScript]);
@@ -247,19 +160,20 @@ function ComicDrawing({
     }
   }
 
-  // Save text and balloon edits a moment after each change.
+  // Save text and balloon edits a moment after each real change. Lettering is drawn by our code,
+  // so these edits are free: the artwork underneath is never redrawn.
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
+    const body = JSON.stringify({ pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue, sfx, sfxPos }) => ({ caption, captionPos, dialogue, sfx, sfxPos })) })) });
+    if (lastSaved.current === null) lastSaved.current = body;
+    if (body === lastSaved.current) return;
     setSaveState("saving");
     const timer = setTimeout(async () => {
       const response = await fetch(`/api/comics/${comicId}/lettering`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pages: script.pages.map((page) => ({ panels: page.panels.map(({ caption, captionPos, dialogue }) => ({ caption, captionPos, dialogue })) })) }),
+        body,
       }).catch(() => null);
+      if (response?.ok) lastSaved.current = body;
       setSaveState(response?.ok ? "saved" : "error");
     }, 700);
     return () => clearTimeout(timer);
@@ -324,9 +238,7 @@ function ComicDrawing({
             <div className="h-full bg-pop transition-all" style={{ width: `${(readyCount / keys.length) * 100}%` }} />
           </div>
           <p className="mt-2 text-sm text-neutral-700">
-            {allReady
-              ? "Your comic is ready!"
-              : `Drawing ${readyCount} of ${keys.length} pictures… about ${formatDuration(secondsLeft)} left. Keep this page open.`}
+            {allReady ? pick(COPY.drawing.done, comicId) : COPY.drawing.progress(readyCount, keys.length, formatDuration(secondsLeft))}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
@@ -381,7 +293,7 @@ function ComicDrawing({
   );
 }
 
-/** Opt-in sharing on the Explore page. Private by default; can be undone any time. */
+/** Every comic goes on Explore for now; the owner can hide it (and bring it back) any time. */
 function ShareToExplore({ comicId, initialPublished }: { comicId: string; initialPublished: boolean }) {
   const [published, setPublished] = useState(initialPublished);
   const [busy, setBusy] = useState(false);
@@ -397,23 +309,23 @@ function ShareToExplore({ comicId, initialPublished }: { comicId: string; initia
     }).catch(() => null);
     const data = await response?.json().catch(() => ({}));
     if (response?.ok) setPublished(data.explore.published);
-    else setError(data?.error ?? "Couldn't change sharing. Please try again.");
+    else setError(data?.error ?? "Couldn't change that. Please try again.");
     setBusy(false);
   }
 
   return (
     <div className="mx-auto flex max-w-2xl flex-wrap items-center justify-between gap-3 rounded border-2 border-ink bg-white p-3 text-sm">
       <div>
-        <p className="font-bold">{published ? "🌍 Shared on Explore" : "🔒 Private"}</p>
+        <p className="font-bold">{published ? "🌍 On the Explore wall" : "🔒 Hidden from Explore"}</p>
         <p className="text-neutral-600">
           {published
-            ? "Others can see the cover and pages, and recreate its style and format (never your story, names or photos)."
-            : "Share it on Explore so others can be inspired. Only the finished art is shown; your photos never are."}
+            ? "Others see the finished art and can recreate its format with their own story. Never your story text, photos or character sheets."
+            : "Only you can see it. Put it back any time."}
         </p>
         {error && <p className="font-bold text-zap">{error}</p>}
       </div>
       <button type="button" onClick={toggle} disabled={busy} className="rounded border-2 border-ink bg-pop px-3 py-1.5 font-bold disabled:opacity-50">
-        {published ? "Make private" : "Share on Explore"}
+        {published ? "Hide from Explore" : "Put back on Explore"}
       </button>
     </div>
   );
