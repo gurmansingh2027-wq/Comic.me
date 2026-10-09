@@ -512,11 +512,28 @@ function drawBalloon(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type
   drawTextLines(ctx, item.block, x + w / 2, y + item.padY, "center");
 }
 
-/** A sound effect: chunky letters with a thick outline and a hard shadow, slightly tilted. */
+/** A sound effect: chunky letters with a thick outline and a hard shadow, slightly tilted (on a starburst in pop styles). */
 function drawSfx(ctx: CanvasRenderingContext2D, item: Extract<Placed, { type: "sfx" }>, lettering: Lettering, fonts: RenderFonts) {
   ctx.save();
   ctx.translate(item.x + item.w / 2, item.y + item.h / 2);
   ctx.rotate((item.tilt * Math.PI) / 180);
+  if (lettering.sfxBurst) {
+    const outer = Math.max(item.w * 0.62, item.h * 0.95);
+    const points = 14;
+    ctx.beginPath();
+    for (let k = 0; k < points * 2; k++) {
+      const radius = k % 2 === 0 ? outer * (k % 4 === 0 ? 1 : 0.88) : outer * 0.62;
+      const angle = (Math.PI * k) / points;
+      ctx[k === 0 ? "moveTo" : "lineTo"](Math.cos(angle) * radius, Math.sin(angle) * radius * 0.72);
+    }
+    ctx.closePath();
+    ctx.fillStyle = lettering.sfxBurst;
+    ctx.fill();
+    ctx.lineWidth = item.size * 0.06;
+    ctx.strokeStyle = lettering.sfxOutline ?? "#111111";
+    ctx.lineJoin = "miter";
+    ctx.stroke();
+  }
   ctx.font = `${item.size}px ${fonts.title}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -782,6 +799,12 @@ export function drawPage(
     ctx.stroke();
   }
 
+  // Print texture (pop styles): halftone dots in the midtones and shadows, added by us rather than
+  // asked of the image model, which tends to smear dots.
+  if (!options.wireframe && lettering.texture === "halftone" && images.some(Boolean)) {
+    applyHalftone(ctx, frames.filter((_, i) => images[i]));
+  }
+
   // Pass 2: lettering on top of everything, so a balloon the user moved can cross a panel border.
   boxes.forEach((box, i) => {
     const panel = page.panels[i];
@@ -793,6 +816,41 @@ export function drawPage(
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(String(pageNumber), PAGE_W / 2, PAGE_H - MARGIN / 2);
+}
+
+/** Ben-Day style halftone: dots sized by how dark the art is underneath, clipped to each panel. */
+function applyHalftone(ctx: CanvasRenderingContext2D, frames: Frame[]) {
+  const cell = 11;
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(0, 0, PAGE_W, PAGE_H).data;
+  } catch {
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+  for (const frame of frames) {
+    ctx.save();
+    framePath(ctx, frame);
+    ctx.clip();
+    ctx.beginPath();
+    const { x: bx, y: by, w, h } = frame.box;
+    for (let row = 0, y = by; y < by + h; row++, y += cell * 0.87) {
+      for (let x = bx + (row % 2 ? cell / 2 : 0); x < bx + w; x += cell) {
+        const px = Math.min(PAGE_W - 1, Math.max(0, Math.round(x)));
+        const py = Math.min(PAGE_H - 1, Math.max(0, Math.round(y)));
+        const i = (py * PAGE_W + px) * 4;
+        const darkness = 1 - (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11) / 255;
+        const radius = cell * 0.55 * Math.pow(darkness, 1.4);
+        if (radius < 0.8) continue;
+        ctx.moveTo(x + radius, y);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+      }
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 // --- Cover --------------------------------------------------------------------------------------

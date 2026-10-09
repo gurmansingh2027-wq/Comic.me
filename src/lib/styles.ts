@@ -29,6 +29,10 @@ export type Lettering = {
   /** Sound-effect lettering colours. */
   sfxFill?: string;
   sfxOutline?: string;
+  /** Pop styles: a starburst behind each sound effect. */
+  sfxBurst?: string;
+  /** Print texture added by our renderer over the art (halftone dots), so the model doesn't have to fake it. */
+  texture?: "halftone";
 };
 
 export type StyleRecipe = {
@@ -98,9 +102,11 @@ const RECIPES: StyleRecipe[] = [
         "Premium mainstream Western superhero comic book art at the very top of the industry: unmistakably an inked and digitally coloured comic panel (not a painting or photo), the quality of a flagship superhero series, original characters only.",
       linework: "Bold black ink contour lines on every form, varied line weight, feathered hatching and big spot blacks in the shadows; crisp, professional inking.",
       anatomy: "Superb, grounded anatomy with heroic proportions; expressive hands and faces; dynamic, weight-bearing poses with clear gesture lines.",
-      colour: "Rich, professional digital colouring: saturated but controlled palettes, smooth gradients, glowing highlights, atmospheric depth.",
+      colour:
+        "Rich, professional digital colouring: a controlled scene palette built on two dominant hues (warm key vs cool shadow) with one accent; smooth gradients, glowing highlights, coloured rim light, atmospheric depth.",
       lightingAndShadow: "Cinematic lighting: strong key light, rim lights, dramatic cast shadows, volumetric light shafts.",
-      detailAndTexture: "Richly detailed, believable environments; subtle grain and halftone texture in shadows; every panel polished like a splash page.",
+      detailAndTexture:
+        "Richly detailed, believable environments with real texture (weathered stone, fabric folds, metal sheen); intricate rendering with fine hatching in the midtones; subtle grain and halftone in shadows; every panel polished like a splash page. Selective detail: the focal point is the most finished thing in the frame.",
     },
     direction: {
       interpretation:
@@ -111,7 +117,8 @@ const RECIPES: StyleRecipe[] = [
       dialogue: "Restrained and dramatic: few words that carry weight, clipped lines under pressure, a quiet line before the big moment. Captions like a narrator who knows this matters. Let splash panels breathe with little or no text.",
       hero: "A jaw-dropping splash: extreme perspective (worm's-eye or vertiginous overhead), a bold foreground shape framing the hero, a silhouette against light, confident massed blacks, a richly detailed environment with scale, dramatic rim light and volumetric light, clear visual hierarchy, anatomy and pose with real weight and foreshortening.",
     },
-    cover: "Blockbuster cover: one iconic, larger-than-life focal figure or moment, dramatic perspective, epic scale, lens-flare lighting and a bold title space.",
+    cover:
+      "Blockbuster cover: one iconic, larger-than-life focal figure or moment, dramatic perspective, epic scale, a two-tone palette (e.g. amber against steel blue, or crimson glow against cool shadow), and a bold title space.",
     avoid: ["soft painterly rendering without ink lines", "stiff or static poses", "flat lighting", "muddy colours", "plain empty backgrounds"],
     lettering: { ...classicLettering, captionFill: "#fef08a", sfxFill: "#fde047", sfxOutline: "#7f1d1d" },
   },
@@ -141,6 +148,34 @@ const RECIPES: StyleRecipe[] = [
     cover: "Absurd visual gag: the hero in a ridiculous sci-fi predicament with a deadpan expression, weird creatures, a portal or explosion, bold flat colours.",
     avoid: ["realistic rendering", "gritty shading", "copying any existing cartoon's characters or exact look"],
     lettering: { ...classicLettering, captionFill: "#bbf7d0", speakerAccents: ["#15803d", "#7e22ce", "#c2410c", "#0369a1"], sfxFill: "#a3e635", sfxOutline: "#2e1065" },
+  },
+  {
+    id: "pop",
+    label: "Pop",
+    blurb: "Ben-Day dots, starbursts, BIG sound effects",
+    family: "signature",
+    render: {
+      signature:
+        "Bold retro pop-art comic illustration, like a classic four-colour newsprint comic blown up to poster size: graphic, loud and fun, original characters only.",
+      linework: "Thick, confident black outlines of even weight around every shape; simple, crisp interior lines; no sketchiness.",
+      anatomy: "Expressive, slightly stylised figures with big readable gestures and exaggerated reactions; clean simplified faces with strong expressions.",
+      colour: "Flat primary colours (fire-engine red, sunshine yellow, cobalt blue) plus black and white, with bright secondary accents (lime, purple, orange) for backgrounds; no gradients.",
+      lightingAndShadow: "Graphic lighting: shadows as solid black shapes or halftone-dot areas; radiating speed lines and colour bursts behind action.",
+      detailAndTexture:
+        "Ben-Day dot fills in skin tones and backgrounds, radial speed lines, starburst and explosion shapes, smoke puffs and comic clouds; simple but punchy backgrounds that frame the action.",
+    },
+    direction: {
+      interpretation:
+        "Make every moment POP: ordinary beats become explosive comic-book events, with big reactions, visual sound and graphic energy. Fun first, feelings underneath.",
+      camera: "Punchy, close and dynamic: tilted angles, smash-in close-ups on reactions, figures bursting toward the reader.",
+      pacing: "Fast and rhythmic: quick beats in small panels, then an explosive big panel. This style may use the dynamic layouts (slash-2, diagonal-3, zigzag-4) more often than others, at most every other page.",
+      panelDensity: "balanced",
+      dialogue: "Punchy and playful: exclamations, short shouted lines, comic exaggeration, one-word reactions. Sound effects are part of the storytelling: use them often (but not on every panel).",
+      hero: "An explosive pop splash: the hero bursting out of a giant starburst, radial speed lines, huge halftone dots, primary colours at full volume, a big graphic shape behind the figure.",
+    },
+    cover: "Pop-art poster cover: one bold figure or object against a giant starburst or radial burst, flat primary colours, Ben-Day dots, a chunky title.",
+    avoid: ["realistic rendering", "soft gradients", "muted or muddy colours", "painterly texture"],
+    lettering: { ...classicLettering, captionFill: "#fde047", speakerAccents: ["#111111", "#1d4ed8", "#dc2626", "#7c3aed"], sfxFill: "#fde047", sfxOutline: "#111111", sfxBurst: "#dc2626", texture: "halftone" },
   },
   {
     id: "ink",
@@ -221,6 +256,63 @@ const RECIPES: StyleRecipe[] = [
     cover: "Adventure-album cover: the heroes mid-adventure in a vivid, detailed setting.",
     avoid: ["hatching", "gradients", "dark gritty tones"],
     lettering: { ...classicLettering, captionFill: "#fef9c3" },
+  },
+  {
+    id: "bold-graphic",
+    label: "Bold Graphic",
+    blurb: "Flat shapes, big blacks, design-led",
+    family: "classic",
+    render: {
+      signature:
+        "Modern design-led comic illustration in the spirit of contemporary variant covers: confident brush-inked figures, flat graphic colour, strong design, original characters only.",
+      linework: "Clean, bold brush-ink contours with tapered strokes; economical interior lines; solid black masses defining form.",
+      anatomy: "Stylised, elegant anatomy with strong silhouettes and grounded, characterful poses; simplified faces with clear expressions.",
+      colour: "Flat colour fields from a restrained palette (two or three colours plus black and off-white), sometimes a single bold background colour.",
+      lightingAndShadow: "Hard-edged shadow shapes in solid black or one darker tone; no soft gradients; light shown by shape, not rendering.",
+      detailAndTexture:
+        "Minimal backgrounds made of graphic shapes, colour bands and geometric patterns; generous negative space; a slight print texture.",
+    },
+    direction: {
+      interpretation: "Find the iconic image in every beat: distil scenes to strong shapes and gestures, like a series of designed posters with feeling.",
+      camera: "Clean, considered compositions: off-centre figures, strong silhouettes, bold crops, unusual negative space.",
+      pacing: "Measured: a few bold panels per page, each one a designed image; occasional wordless panels.",
+      panelDensity: "sparse",
+      dialogue: "Cool and understated: short, sharp lines, wit over volume; captions minimal.",
+      hero: "A poster-worthy hero image: a striking silhouette or off-centre figure against bold colour shapes and negative space, design and illustration in perfect balance.",
+    },
+    cover:
+      "Design-led cover: the figure off-centre or cropped, flat geometric colour shapes behind, lots of negative space, illustration and typography working together.",
+    avoid: ["busy painterly rendering", "soft gradients", "cluttered backgrounds", "photographic lighting"],
+    lettering: { ...classicLettering, captionFill: "#f5f0e6", sfxFill: "#ffffff", sfxOutline: "#111111" },
+  },
+  {
+    id: "euro-comedy",
+    label: "Euro Comedy",
+    blurb: "Big noses, big crowds, big laughs",
+    family: "classic",
+    render: {
+      signature:
+        "Classic European humour-album cartooning, original characters only: warm, energetic, caricatured and hugely readable, full of physical comedy.",
+      linework: "Lively, confident pen lines with a slight swell; clean contours; expressive motion lines and dust clouds.",
+      anatomy:
+        "Caricature: big noses, round bodies, small legs, big hands and feet; extremely expressive faces; squash-and-stretch exaggeration in every action; identity markers (glasses, turban, beard, hairstyle) kept recognisable.",
+      colour: "Bright, flat, cheerful colours with simple shading; clear colour separation between characters.",
+      lightingAndShadow: "Simple, even daylight with soft cast shadows; mood through colour, not darkness.",
+      detailAndTexture:
+        "Busy, funny crowd scenes and detailed, believable settings full of background gags (a dog stealing food, an uncle asleep, a goat on a scooter).",
+    },
+    direction: {
+      interpretation:
+        "Play the story as a big-hearted comedy: every scene has a gag, crowds are a chorus of reactions, slapstick escalates, and the emotional moment lands because we've laughed first.",
+      camera: "Wide, theatrical staging so the whole gag reads in one glance; cut to close-ups only for reaction punchlines.",
+      pacing: "A gag per page: setup, escalation, a silent beat, punchline. One big crowd splash at the climax.",
+      panelDensity: "dense",
+      dialogue: "Comic banter, puns, comic insults, deadpan asides from the crowd; short lines; sound effects for every bump (BONK, SPLAT).",
+      hero: "A giant, jam-packed crowd splash at the comic climax: dozens of distinct caricatured reactions, sight gags everywhere, the heroes at the centre of glorious chaos.",
+    },
+    cover: "A comedy album cover: the heroes mid-pratfall or mid-celebration, a crowd of caricatured faces, bright flat colour, a visual gag.",
+    avoid: ["realistic proportions", "gritty shading", "dark moody lighting", "copying any existing comic's characters or look"],
+    lettering: { ...classicLettering, captionFill: "#fef3c7", sfxFill: "#ffffff", sfxOutline: "#111111" },
   },
   {
     id: "newspaper",

@@ -52,9 +52,44 @@ function masonry(tiles: Tile[], width: number): { items: Placed[]; height: numbe
   return { items, height: Math.max(...heights) };
 }
 
-export default function ExploreWall({ tiles }: { tiles: Tile[] }) {
+/**
+ * The wall. With `nextOffset`, more tiles load from /api/explore as you scroll (infinite scroll);
+ * new tiles are appended, so the ones already on screen never move.
+ */
+export default function ExploreWall({ tiles: initialTiles, nextOffset: initialNext = null }: { tiles: Tile[]; nextOffset?: number | null }) {
   const ref = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [tiles, setTiles] = useState(initialTiles);
+  const [nextOffset, setNextOffset] = useState<number | null>(initialNext);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const element = sentinel.current;
+    if (!element || nextOffset === null || loading || failed) return;
+    const observer = new IntersectionObserver(
+      async (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        observer.disconnect();
+        setLoading(true);
+        try {
+          const response = await fetch(`/api/explore?offset=${nextOffset}&limit=30`, { cache: "no-store" });
+          if (!response.ok) throw new Error();
+          const data = (await response.json()) as { tiles: Tile[]; nextOffset: number | null };
+          setTiles((current) => [...current, ...data.tiles.filter((tile) => !current.some((c) => c.key === tile.key))]);
+          setNextOffset(data.nextOffset);
+        } catch {
+          setFailed(true);
+        } finally {
+          setLoading(false);
+        }
+      },
+      { rootMargin: "1200px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [nextOffset, loading, failed]);
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
@@ -66,15 +101,29 @@ export default function ExploreWall({ tiles }: { tiles: Tile[] }) {
   const layout = useMemo(() => masonry(tiles, width), [tiles, width]);
 
   return (
-    <div ref={ref} className="relative w-full" style={{ height: layout.height || "100vh" }}>
-      {layout.items.map((item) => (
-        <ExploreTile
-          key={item.tile.key}
-          tile={item.tile}
-          size={item.height < 150 || item.width < 150 ? "tiny" : item.height < 230 ? "small" : "full"}
-          style={{ left: item.left, top: item.top, width: item.width, height: item.height }}
-        />
-      ))}
-    </div>
+    <>
+      <div ref={ref} className="relative w-full" style={{ height: layout.height || "100vh" }}>
+        {layout.items.map((item) => (
+          <ExploreTile
+            key={item.tile.key}
+            tile={item.tile}
+            size={item.height < 150 || item.width < 150 ? "tiny" : item.height < 230 ? "small" : "full"}
+            style={{ left: item.left, top: item.top, width: item.width, height: item.height }}
+          />
+        ))}
+      </div>
+      <div ref={sentinel} aria-hidden className="h-px" />
+      {(loading || failed) && (
+        <p className="py-6 text-center text-sm text-white/50">
+          {failed ? (
+            <button type="button" onClick={() => setFailed(false)} className="underline">
+              Couldn&apos;t load more. Try again
+            </button>
+          ) : (
+            "Inking more…"
+          )}
+        </p>
+      )}
+    </>
   );
 }

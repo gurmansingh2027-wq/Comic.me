@@ -151,6 +151,12 @@ Line art must look **intentionally drawn**, never "a colour image run through an
 | Stylised 3D | Clay or animated-film renders | Family-friendly, kids | Medium (needs a different model) |
 
 ## Recommendation: the first four to prototype
+
+**Status (9 Oct):**
+- Live now: **Pop** (with renderer halftone and starburst SFX), **Euro Comedy** and **Bold Graphic**. Bold Graphic is the design-led variant-cover look learned from reference 08.
+- Prestige is pushed further toward references 03 and 06 (two-tone palettes, material texture, selective detail).
+- Next up: Ink variants.
+
 1. **Pop Comic.**
    - The most "fun" gap in the current line-up, and it uses the new SFX, speaker accents and dynamic layouts.
    - Halftone can come from the renderer, so the quality risk is low.

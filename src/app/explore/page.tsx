@@ -6,6 +6,9 @@ import { exploreWall } from "@/lib/explore";
 export const metadata = { title: "Explore — Comic.me" };
 export const dynamic = "force-dynamic";
 
+/** Tiles in the first page; the rest load as you scroll. */
+const PAGE_SIZE = 30;
+
 export default async function ExplorePage() {
   const { comics, tiles } = await exploreWall();
   return (
@@ -28,7 +31,7 @@ export default async function ExplorePage() {
           </Link>
         </div>
       ) : (
-        <ExploreWall tiles={tiles} />
+        <ExploreWall tiles={tiles.slice(0, PAGE_SIZE)} nextOffset={tiles.length > PAGE_SIZE ? PAGE_SIZE : null} />
       )}
     </div>
   );

@@ -3,7 +3,7 @@
 > Art-direction references the founder attached on 9 Oct 2026, treated as **product requirements**, not decoration.
 > We learn the craft from them. We never copy characters, costumes, logos, layouts pixel-for-pixel, or anyone's story.
 
-**Files.** The images sit next to this README on the founder's machine. Only `02_current_boring_cover.png` (our own art) is committed. The others are third-party copyrighted or licensed images, so `.gitignore` keeps them out of this public repo. Ask the founder for the originals if you need them.
+**Files.** The images sit next to this README on the founder's machine and stay out of the repo on purpose: Comic.me will be a paid product, so we learn from these images and never ship or train on them. Only `02_current_boring_cover.png` (our own art) is committed. The others are third-party copyrighted or licensed images, so `.gitignore` keeps them out of this public repo. Ask the founder for the originals if you need them.
 
 ---
 
@@ -62,7 +62,7 @@ DO NOT USE FOR:
 - Constant use. Dynamic layouts follow story + style + importance.
 - The stock artwork itself.
 
-**Applied in:** the `slash-2`, `diagonal-3`, `zigzag-4` and `inset` layouts (`src/lib/layouts.ts`), with even gutters on slanted edges (`pageFrames` in `render.ts`).
+**Applied in:** the **Pop** style (`src/lib/styles.ts`), and the `slash-2`, `diagonal-3`, `zigzag-4` and `inset` layouts (`src/lib/layouts.ts`), with even gutters on slanted edges (`pageFrames` in `render.ts`).
 
 ## 05_pop_comic_sfx_reference (stock pop-art SFX pattern)
 USE FOR:
@@ -75,7 +75,7 @@ DO NOT USE FOR:
 - Plastering SFX on every panel.
 - The stock artwork itself.
 
-**Applied in:** `Panel.sfx`, lettered by `drawSfx` (style-specific colours via `lettering.sfxFill/sfxOutline`). The writer adds SFX only where the style and moment want them.
+**Applied in:** the **Pop** style (halftone texture added by our renderer, starbursts behind SFX), and `Panel.sfx`, lettered by `drawSfx` (style-specific colours via `lettering.sfxFill/sfxOutline`). The writer adds SFX only where the style and moment want them.
 
 ## 06_prestige_cyborg_reference (a mainstream superhero splash)
 USE FOR (the second quality bar for hero panels):
@@ -116,6 +116,7 @@ DO NOT USE FOR:
 - Black Panther's design, costume, logo or the Marvel trade dress.
 
 **Applied in:**
+- The **Bold Graphic** style: brush-inked figures, flat colour shapes, negative space, design-led covers.
 - The `graphic-minimal`, `geometric-abstract`, `negative-space` and `editorial-design` composition families.
 - The cover prompt now commits to the chosen family ("don't fall back to a centred character posing in front of a background").
 - Title size defaults can be small and confident.
