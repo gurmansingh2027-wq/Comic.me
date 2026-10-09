@@ -9,9 +9,8 @@ import { metered } from "../meter";
 import { castRefsFor, ledgerFor, objectRefsFor, qaReferences } from "../picture-context";
 import { loadComic, loadImage, loadQaFile, saveComic, saveQaFile, withComicLock } from "../storage";
 import { getStyle } from "../styles";
-import { isHard, type FailureClass } from "./failure-classes";
 import { artRevision, comicRevision, exportReady, pageRevision } from "./state";
-import { checkSequence, contactSheet, sequenceFacts, type QaReference, type SequenceVerdict } from "./visual-qa";
+import { checkSequence, contactSheet, sequenceBlockers, sequenceFacts, type QaReference, type SequenceVerdict } from "./visual-qa";
 
 const globalQa = globalThis as typeof globalThis & { qaFlights?: Map<string, Promise<unknown>> };
 const flights = globalQa.qaFlights ??= new Map();
@@ -38,9 +37,15 @@ export function qaStatus(comic: Comic) {
     pictures: Object.fromEntries(Object.entries(comic.qa?.pictures ?? {}).map(([key, record]) => [key, { status: record.status, accepted: record.accepted?.revision === art, digest: record.accepted?.digest, attempts: record.attempts, notes: record.notes }])),
     pages: Object.fromEntries(pages.map(page => { const check = comic.qa?.pages?.[page]; return [page, check?.revision === pageRevision(comic, page) ? check : null]; })),
     final: comic.qa?.final,
+    open: openFindings(comic),
   };
 }
-const blocking = (findings: QaFinding[]) => findings.filter(f => isHard(f.failure as FailureClass));
+/** Current problems the automatic fixes couldn't solve, once each. */
+function openFindings(comic: Comic): QaFinding[] {
+  const pages = Object.entries(comic.qa?.pages ?? {}).filter(([page, check]) => check.revision === pageRevision(comic, page)).flatMap(([, check]) => check.open ?? []);
+  const final = comic.qa?.final?.revision === comicRevision(comic) ? comic.qa.final.open ?? [] : [];
+  return [...new Map([...pages, ...final].map(f => [`${f.key}/${f.what}`, f])).values()];
+}
 async function inspect(comic: Comic, input: Parameters<typeof checkSequence>[0]): Promise<SequenceVerdict> {
   const measured = await metered(async () => {
     try {
@@ -73,12 +78,17 @@ function factsFor(comic: Comic, keys: string[]) {
 async function saveCheck(id: string, revision: string, fn: (comic: Comic) => void) {
   return withComicLock(id, async () => { const latest = await requireComic(id, revision); fn(latest); await saveComic(latest); });
 }
-async function repair(comic: Comic, findings: QaFinding[]) {
-  for (const key of [...new Set(blocking(findings).map(f => f.key))]) {
+/** Redraws the pictures with hard findings. True when at least one new picture passed its check. */
+async function repair(comic: Comic, blockers: QaFinding[]): Promise<boolean> {
+  let changed = false;
+  for (const key of [...new Set(blockers.map(f => f.key))]) {
     if (!imageKeys(comic.script!).includes(key)) continue;
-    try { await drawingService.draw(comic.id, key, { repair: findings.filter(f => f.key === key).map(f => f.fix || f.what).join("; ") }); }
+    const before = comic.qa?.pictures[key]?.accepted?.digest;
+    try { await drawingService.draw(comic.id, key, { repair: blockers.filter(f => f.key === key).map(f => f.fix || f.what).join("; ") }); }
     catch (error) { if (!(error instanceof UserFacingError && [422, 425].includes(error.status))) throw error; }
+    if ((await requireComic(comic.id)).qa?.pictures[key]?.accepted?.digest !== before) changed = true;
   }
+  return changed;
 }
 export async function checkPage(id: string, revision: string, page: string, data: Buffer) {
   return once(`${id}/page/${page}/${revision}`, async () => {
@@ -99,10 +109,11 @@ export async function checkPage(id: string, revision: string, page: string, data
       // Close-ups prevent full-page downscaling from hiding identity defects.
       for (const key of keys) { const data = await loadImage(id, key); if (data) references.push({ label: `Close-up of picture ${key}`, data }); }
       const verdict = await inspect(comic, { pageImage: image, label: `Lettered page ${page}; panels in reading order: ${keys.join(", ")}`, facts: factsFor(comic, keys), style: getStyle(comic.styleId)!, references });
-      const invalidKey = verdict.findings.some(f => !keys.includes(f.key));
-      const check: QaCheck = { revision: targetRevision, status: verdict.confidence === "high" && !invalidKey && !blocking(verdict.findings).length ? "accepted" : "blocked", findings: verdict.findings, notes: verdict.notes, at: new Date().toISOString() };
+      const blockers = sequenceBlockers(verdict, keys);
+      const check: QaCheck = { revision: targetRevision, status: blockers.length ? "blocked" : "accepted", findings: verdict.findings, notes: verdict.notes, at: new Date().toISOString() };
       await saveCheck(id, revision, latest => { latest.qa!.pages ??= {}; latest.qa!.pages[page] = { ...check, file }; latest.qa!.final = undefined; });
-      if (check.status === "blocked") await repair(comic, verdict.findings);
+      // When no fix passed its own check, checking again can't change anything: finish with the problems listed.
+      if (blockers.length && !(await repair(comic, blockers))) await saveCheck(id, revision, latest => { latest.qa!.pages![page] = { ...latest.qa!.pages![page], status: "accepted", open: blockers }; });
     } catch (error) {
       await saveCheck(id, revision, latest => { latest.qa!.pages ??= {}; latest.qa!.pages[page] = { revision: targetRevision, status: "error", findings: [], notes: "Page inspection interrupted. Retry checks.", at: new Date().toISOString() }; latest.qa!.final = undefined; }).catch(() => {});
       throw error;
@@ -117,7 +128,7 @@ export async function checkFinal(id: string, revision: string) {
     const pages = [...(comic.script!.cover ? ["cover"] : []), ...comic.script!.pages.map((_, i) => String(i + 1))];
     if (pages.some(page => comic.qa?.pages?.[page]?.status !== "accepted" || comic.qa.pages[page].revision !== pageRevision(comic, page))) throw new UserFacingError("Check each finished page before the final review.", 409);
     const findings: QaFinding[] = [];
-    let certain = true;
+    const blockers: QaFinding[] = [];
     try {
       // Sliding adjacent pairs include every page boundary at readable resolution.
       const keys = imageKeys(comic.script!);
@@ -129,9 +140,9 @@ export async function checkFinal(id: string, revision: string) {
         const pictures = await Promise.all(pair.map(async key => ({ key, data: (await loadImage(id, key))! })));
         if (pictures.some(p => !p.data)) throw new UserFacingError("A picture is missing.", 409);
         const verdict = await inspect(comic, { pageImage: await contactSheet(pictures, 700, 2), label: `Adjacent pictures ${pair.join(" → ")}`, facts: factsFor(comic, pair), style: getStyle(comic.styleId)!, references: await referencesFor(comic, pair) });
-        certain &&= verdict.confidence === "high" && verdict.findings.every(f => pair.includes(f.key));
-        findings.push(...verdict.findings);
-        await saveCheck(id, revision, latest => { latest.qa!.sequences ??= {}; latest.qa!.sequences[pair.join("/")] = { revision: pairRevision, status: verdict.confidence === "high" && !blocking(verdict.findings).length && verdict.findings.every(f => pair.includes(f.key)) ? "accepted" : "blocked", findings: verdict.findings, at: new Date().toISOString() }; });
+        const pairBlockers = sequenceBlockers(verdict, pair);
+        findings.push(...verdict.findings); blockers.push(...pairBlockers);
+        await saveCheck(id, revision, latest => { latest.qa!.sequences ??= {}; latest.qa!.sequences[pair.join("/")] = { revision: pairRevision, status: pairBlockers.length ? "blocked" : "accepted", findings: verdict.findings, at: new Date().toISOString() }; });
       }
       // Whole-book audit in readable page batches. Each batch sees the complete plan and canon,
       // plus earlier appearances of recurring identities instead of tiny whole-book thumbnails.
@@ -149,11 +160,12 @@ export async function checkFinal(id: string, revision: string) {
         for (const person of comic.cast ?? []) { const first = entries.find(e => e.people.some(p => p.name === person.name)); if (first) firstKeys.add(first.key); }
         for (const key of firstKeys) { const data = await loadImage(id, key); if (data) refs.push({ label: `Earlier established appearance in ${key}: ${factsFor(comic, [key])}`, data }); }
         const verdict = await inspect(comic, { pageImage: images[0].data!, label: `Final book audit: page ${batch[0]}. Additional pages ${batch.slice(1).join(", ") || "none"}. Report picture keys, not page numbers.`, facts: `Complete storyboard and ledger:\n${overview}\nInspect these pictures: ${batchKeys.join(", ")}`, style: getStyle(comic.styleId)!, references: refs });
-        certain &&= verdict.confidence === "high" && verdict.findings.every(f => keys.includes(f.key));
-        findings.push(...verdict.findings);
+        findings.push(...verdict.findings); blockers.push(...sequenceBlockers(verdict, keys));
       }
-      await saveCheck(id, revision, latest => { latest.qa!.final = { revision, status: certain && !blocking(findings).length ? "accepted" : "blocked", findings, at: new Date().toISOString(), notes: certain ? undefined : "Some details could not be confirmed. Retry checks." }; });
-      if (blocking(findings).length) await repair(comic, findings);
+      const pagesOpen = pages.flatMap(page => comic.qa!.pages![page].open ?? []);
+      await saveCheck(id, revision, latest => { latest.qa!.final = { revision, status: blockers.length ? "blocked" : "accepted", findings, open: pagesOpen, at: new Date().toISOString() }; });
+      // Same as pages: if nothing could be fixed, the review finishes with the problems listed.
+      if (blockers.length && !(await repair(comic, blockers))) await saveCheck(id, revision, latest => { latest.qa!.final = { ...latest.qa!.final!, status: "accepted", open: [...pagesOpen, ...blockers] }; });
     } catch (error) {
       await saveCheck(id, revision, latest => { latest.qa!.final = { revision, status: "error", findings, notes: "Final inspection interrupted. Retry checks.", at: new Date().toISOString() }; }).catch(() => {});
       throw error;

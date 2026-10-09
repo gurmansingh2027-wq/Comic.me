@@ -171,7 +171,16 @@ export type SequenceVerdict = z.infer<typeof SequenceSchema>;
 
 const SEQUENCE_PROMPT = `${QA_PROMPT}
 
-You are now checking a whole page (or the whole comic) at once, which exposes problems single pictures hide: the same character or vehicle drifting between panels (colour, livery, model, face, clothes mid-scene), duplicate people, contradictory geography or direction between consecutive panels, anyone teleporting, objects appearing or vanishing, sudden proportion changes, and (on lettered pages) balloons far from their speaker, covering faces, or text cut off. Tie every finding to the single picture that should be redrawn (the one that's inconsistent with the canon sheets and the majority).`;
+You are now checking a whole page (or the whole comic) at once, which exposes problems single pictures hide: the same character or vehicle drifting between panels (colour, livery, model, face, clothes mid-scene), duplicate people, contradictory geography or direction between consecutive panels, anyone teleporting, objects appearing or vanishing, sudden proportion changes, and (on lettered pages) balloons far from their speaker, covering faces, or text cut off. Tie every finding to the single picture that should be redrawn (the one that's inconsistent with the canon sheets and the majority). A hard class means that picture must be redrawn: use one only for a concrete problem you can point at. Anything minor, optional or already acceptable uses a soft class or no finding at all.`;
+
+/**
+ * The findings that block a page or the whole book: concrete hard failures on pictures in it.
+ * Same rule as `decide` after its careful second look: every picture already passed its own
+ * check, so lower confidence and soft findings never block, and findings on unknown keys are ignored.
+ */
+export function sequenceBlockers(verdict: SequenceVerdict, keys: string[]): SequenceVerdict["findings"] {
+  return verdict.findings.filter((f) => keys.includes(f.key) && isHard(f.failure));
+}
 
 /** Checks a lettered page (as rendered for the reader) for cross-panel continuity and lettering problems. */
 export async function checkSequence({

@@ -86,12 +86,9 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
       } else if (!old) latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], at: new Date().toISOString() };
       else if (old.revision !== revision) throw new UserFacingError("The drawing plan changed. Review it before retrying.", 409);
       else if ((options.redraw || options.restart) && old.status === "accepted") done = true;
-      if (options.repair) {
-        const record = latest.qa.pictures[key];
-        record.candidate = undefined;
-        record.notes = options.repair;
-        record.status = "blocked";
-      }
+      // An automatic fix from the page checks gets its own attempts (the first drawing may have used
+      // them all); the accepted picture stays live until a better one passes.
+      if (options.repair) latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], notes: options.repair, at: new Date().toISOString(), accepted: latest.qa.pictures[key]?.accepted };
     });
     if (done) return;
     const writeRecord = async (patch: Partial<PictureQa>) => {
@@ -147,7 +144,10 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
         if (decision === "flag") throw new UserFacingError("This picture needs another try. We could not confirm its continuity.", 422);
       }
     } catch (error) {
-      if (!(error instanceof UserFacingError && error.status === 422)) await writeRecord({ status: "error", notes: "Drawing or inspection was interrupted. Retry to resume." });
+      const usedUp = error instanceof UserFacingError && error.status === 422;
+      // A fix that didn't pass leaves the earlier accepted picture in place, still accepted.
+      if (usedUp && options.repair && comic.qa!.pictures[key].accepted?.revision === revision) await writeRecord({ status: "accepted", candidate: undefined, notes: "The automatic fix didn't pass its check, so this picture stays as it was." });
+      else if (!usedUp) await writeRecord({ status: "error", notes: "Drawing or inspection was interrupted. Retry to resume." });
       throw error;
     }
   }
