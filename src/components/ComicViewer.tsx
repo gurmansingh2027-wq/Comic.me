@@ -238,6 +238,8 @@ function ComicDrawing({
           if (!blob) throw new Error("Couldn't prepare this page for checking.");
           const response = await fetch(`/api/comics/${comicId}/qa?page=${page}&revision=${current.revision}`, { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
           const result = await response.json();
+          // The comic changed while we were checking (a panel was redrawn): start the round again.
+          if (response.status === 409) { current = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json()); break; }
           if (!response.ok) throw new Error(result.error ?? "Page check interrupted.");
           current = result;
           if (current.revision !== before) break;
@@ -247,8 +249,9 @@ function ComicDrawing({
           setQaProgress("Final read-through of the whole comic, a few pages at a time…");
           const response = await fetch(`/api/comics/${comicId}/qa`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "final", revision: current.revision }) });
           const result = await response.json();
-          if (!response.ok) throw new Error(result.error ?? "Final check interrupted.");
-          current = result;
+          if (response.status === 409) current = await fetch(`/api/comics/${comicId}/qa`, { cache: "no-store" }).then(r => r.json());
+          else if (!response.ok) throw new Error(result.error ?? "Final check interrupted.");
+          else current = result;
           if (current.revision === before && !current.ready) break;
         }
         if (current.revision !== before) {

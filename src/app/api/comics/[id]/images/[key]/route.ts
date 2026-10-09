@@ -10,6 +10,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/comics/[id]
     await drawingService.draw(id, key, {
       redraw: body.redraw === true,
       restart: body.restart === true,
+      fresh: body.fresh === true,
       requestId: typeof body.requestId === "string" ? body.requestId.slice(0, 80) : undefined,
       expectedDigest: typeof body.expectedDigest === "string" ? body.expectedDigest : undefined,
       feedback: typeof body.feedback === "string" ? body.feedback.slice(0, 1000) : undefined,

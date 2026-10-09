@@ -141,7 +141,7 @@ export async function approveStoryboard(id: string): Promise<void> {
     const ledger = buildLedger(comic.script, comic.cast, comic.objects);
     const unresolved = ledger.issues.filter(issue => issue.severity === "hard" && !issue.fixed);
     if (unresolved.length) throw new UserFacingError(unresolved.map(issue => `${issue.key}: ${issue.message}`).join(" "), 409);
-    await saveComic({ ...comic, script: ledger.script, stage: "drawing", qa: { version: 1, pictures: {} } });
+    await saveComic({ ...comic, script: ledger.script, stage: "drawing", qa: { version: 1, revisions: 2, pictures: {} } });
   });
 }
 

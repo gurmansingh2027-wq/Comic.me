@@ -403,6 +403,8 @@ export type PictureQa = {
 };
 export type ComicQa = {
   version?: 1;
+  /** 2 = each picture and page check stores its own revision (see `migrateQaRevisions`). */
+  revisions?: 2;
   pictures: Record<string, PictureQa>;
   pages?: Record<string, QaCheck & { file?: string }>;
   sequences?: Record<string, QaCheck>;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDrawingService } from "../src/lib/drawing-service";
-import { artRevision, comicRevision, exportReady, pageRevision } from "../src/lib/qa/state";
+import { artRevision, comicRevision, exportReady, migrateQaRevisions, pageRevision, pictureRevision } from "../src/lib/qa/state";
 import { decide, PanelVerdictSchema, sequenceBlockers, type PanelVerdict, type SequenceVerdict } from "../src/lib/qa/visual-qa";
 import type { Comic } from "../src/lib/comic";
 import { recordUsage } from "../src/lib/meter";
@@ -132,4 +132,27 @@ test("a picture drawn before checks existed is inspected first and only redrawn 
 test("an unknown label from the inspector falls back safely instead of failing the inspection", () => {
   const verdict = PanelVerdictSchema.parse({ checks: [{ dimension: "VEHICLE_LIVERY", status: "fail", note: "" }], failures: [{ failure: "WRONG_CAR_COLOUR", what: "orange" }], confidence: "very high", fix: "paint it white" });
   assert.equal(verdict.checks[0].dimension, "STYLE"); assert.equal(verdict.failures[0].failure, "SCENE_MISMATCH"); assert.equal(verdict.confidence, "medium");
+});
+test("a fresh redraw draws from the storyboard with the requested change instead of editing the picture", async () => {
+  const h = harness([pass, pass]); await h.service.draw(h.comic.id, "1-1");
+  const accepted = h.comic.qa!.pictures["1-1"].accepted!;
+  await h.service.draw(h.comic.id, "1-1", { redraw: true, fresh: true, requestId: "fresh-1", expectedDigest: accepted.digest, feedback: "camera inside the car" });
+  assert.equal(h.prompts.length, 2); assert.match(h.prompts[1], /camera inside the car/); assert.doesNotMatch(h.prompts[1], /Requested change \(apply it clearly\)/);
+});
+test("editing one panel only redraws that picture; the others stay accepted", async () => {
+  const h = harness([pass, pass, pass]); await h.service.draw(h.comic.id, "1-1"); await h.service.draw(h.comic.id, "1-2");
+  const other = pictureRevision(h.comic, "1-1");
+  h.comic.script!.pages[0].panels[1].scene = "A quiet landscape at dawn";
+  assert.equal(pictureRevision(h.comic, "1-1"), other);
+  assert.notEqual(h.comic.qa!.pictures["1-2"].accepted!.revision, pictureRevision(h.comic, "1-2"));
+  await h.service.draw(h.comic.id, "1-2");
+  assert.equal(h.prompts.length, 3); assert.match(h.prompts[2], /dawn/);
+  assert.equal(h.comic.qa!.pictures["1-2"].accepted!.revision, pictureRevision(h.comic, "1-2"));
+  assert.equal(h.comic.qa!.pictures["1-1"].accepted!.revision, other);
+});
+test("comics checked under the whole-book revision keep their checks after migration", () => {
+  const comic = fixture(); const legacy = artRevision(comic);
+  comic.qa!.pictures["1-1"] = { attempts: 1, status: "accepted", revision: legacy, findings: [], at: "", accepted: { digest: "d", revision: legacy, at: "" } };
+  migrateQaRevisions(comic);
+  assert.equal(comic.qa!.revisions, 2); assert.equal(comic.qa!.pictures["1-1"].accepted!.revision, pictureRevision(comic, "1-1"));
 });

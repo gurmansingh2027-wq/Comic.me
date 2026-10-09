@@ -7,13 +7,14 @@ import { UserFacingError } from "./errors";
 import { metered } from "./meter";
 import { castRefsFor, ledgerFor, objectRefsFor, qaReferences } from "./picture-context";
 import type { LedgerEntry } from "./continuity";
-import { artRevision, digest, invalidateComposition } from "./qa/state";
+import { digest, invalidateComposition, pictureRevision } from "./qa/state";
 import { checkPanel, decide, maxAttempts, panelFacts } from "./qa/visual-qa";
 import { imagePath, loadComic, loadImage, loadQaFile, saveComic, saveImage, saveQaFile, withComicLock } from "./storage";
 import { getStyle } from "./styles";
 
 const defaults = { loadComic, loadImage, loadQaFile, saveComic, saveImage, saveQaFile, withComicLock, drawImage, checkPanel, qaReferences };
-type Options = { restart?: boolean; redraw?: boolean; requestId?: string; expectedDigest?: string; feedback?: string; repair?: string };
+/** `fresh`: redraw from the storyboard and the requested change instead of editing the current picture (edits keep its composition). */
+type Options = { restart?: boolean; redraw?: boolean; fresh?: boolean; requestId?: string; expectedDigest?: string; feedback?: string; repair?: string };
 const shared = globalThis as typeof globalThis & { pictureFlights?: Map<string, Promise<void>> };
 
 export function createDrawingService(overrides: Partial<typeof defaults> = {}, flights = new Map<string, Promise<void>>()) {
@@ -39,7 +40,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
     let comic = await deps.loadComic(id);
     if (!comic?.script || !imageKeys(comic.script).includes(key)) throw new UserFacingError("Picture not found.", 404);
     if (!drawingApproved(comic)) throw new UserFacingError("Approve the storyboard before drawing.", 409);
-    const revision = artRevision(comic);
+    const revision = pictureRevision(comic, key);
     const style = getStyle(comic.styleId)!;
     const { script, entries, issues } = ledgerFor(comic);
     if (issues.some(issue => issue.severity === "hard" && !issue.fixed) && comic.qa?.version) throw new UserFacingError("Review the storyboard continuity before drawing.", 409);
@@ -65,7 +66,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
       if (earlierFlight) await earlierFlight;
       comic = (await deps.loadComic(id))!;
       const accepted = comic.qa?.pictures[entry.continuesFrom]?.accepted;
-      if (comic.qa?.version && accepted?.revision !== revision) throw new UserFacingError("Waiting for the preceding picture.", 425);
+      if (comic.qa?.version && accepted?.revision !== pictureRevision(comic, entry.continuesFrom)) throw new UserFacingError("Waiting for the preceding picture.", 425);
     }
     const references = await deps.qaReferences(comic, entry, objectRefs, castRefs);
     const previous = entry?.continuesFrom ? await deps.loadImage(id, entry.continuesFrom) : null;
@@ -92,7 +93,8 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
           latest.qa.pictures[key].candidate = file;
         }
       }
-      else if (old.revision !== revision) throw new UserFacingError("The drawing plan changed. Review it before retrying.", 409);
+      // This picture's plan changed (its panel or its continuity was edited): draw it again from scratch.
+      else if (old.revision !== revision) latest.qa.pictures[key] = { attempts: 0, status: "checking", revision, findings: [], at: new Date().toISOString(), accepted: old.accepted };
       else if ((options.redraw || options.restart) && old.status === "accepted") done = true;
       // An automatic fix from the page checks gets its own attempts (the first drawing may have used
       // them all); the accepted picture stays live until a better one passes.
@@ -101,7 +103,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
     if (done) return;
     const writeRecord = async (patch: Partial<PictureQa>) => {
       comic = await update(id, latest => {
-        if (artRevision(latest) !== revision) throw new UserFacingError("The drawing plan changed.", 409);
+        if (pictureRevision(latest, key) !== revision) throw new UserFacingError("The drawing plan changed.", 409);
         Object.assign(latest.qa!.pictures[key], patch, { at: new Date().toISOString() });
       });
     };
@@ -117,8 +119,13 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
           const attempt = record.attempts + 1;
           const simplified = attempt === limit;
           await writeRecord({ attempts: attempt, status: "generating", simplified, escalated: false });
-          const retry = attempt > 1 || options.repair || record.findings.length ? { fix: record.notes || options.repair || "Preserve all canon details and the story beat.", safe: simplified } : undefined;
-          const revisionInput = options.redraw && existing ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
+          const fresh = !!options.redraw && !!options.fresh;
+          const fix = [
+            fresh && options.feedback ? `The reader asked for this change: ${options.feedback}` : "",
+            attempt > 1 || options.repair || record.findings.length ? record.notes || options.repair || "Preserve all canon details and the story beat." : "",
+          ].filter(Boolean).join(" ");
+          const retry = fix ? { fix, safe: simplified } : undefined;
+          const revisionInput = options.redraw && existing && !fresh ? { currentPath: imagePath(id, key), feedback: options.feedback ?? "" } : undefined;
           const job = key === "cover" ? coverJob(script, style, castRefs, revisionInput, objectRefs, retry, entry) : panelJob(script, p, i, style, castRefs, revisionInput, { objectRefs, entry, previousPanelPath: previousPath, retry });
           candidate = await billed(id, options.redraw || attempt > 1 || options.repair ? "redraw" : "picture", `${key} attempt ${attempt}${simplified ? " safe composition" : ""}`, () => deps.drawImage(job));
           const file = `${randomUUID()}.webp`;
@@ -138,7 +145,7 @@ export function createDrawingService(overrides: Partial<typeof defaults> = {}, f
         const findings = verdict.failures.map(finding => ({ ...finding, key, fix: verdict.fix }));
         if (decision === "accept") {
           await update(id, async latest => {
-            if (artRevision(latest) !== revision) throw new UserFacingError("The drawing plan changed.", 409);
+            if (pictureRevision(latest, key) !== revision) throw new UserFacingError("The drawing plan changed.", 409);
             invalidateComposition(latest);
             await deps.saveComic(latest);
             await deps.saveImage(id, key, candidate!);
