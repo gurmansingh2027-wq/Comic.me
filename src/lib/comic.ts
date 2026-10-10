@@ -449,7 +449,11 @@ export type Comic = {
    * Listing on the Explore page. For the prototype every comic is on Explore by default;
    * `published: false` means the owner hid it.
    */
-  explore?: { published: boolean; publishedAt: string };
+  /**
+   * `featured`: the owner put it on Explore before the whole-book read-through finished. Allowed only
+   * while every picture and page has been checked (the owner sees any problems that are still listed) (`exploreReady` in `qa/state.ts`).
+   */
+  explore?: { published: boolean; publishedAt: string; featured?: boolean };
   /** Recreate: the format this comic was modelled on (another comic's remix preset). */
   preset?: RemixPreset;
   /** How many single pictures the user has asked us to redraw (for limits and pricing later). */
@@ -464,7 +468,7 @@ export type Comic = {
 
 /** Prototype rule: every comic is on Explore unless its owner hid it. */
 export function onExplore(comic: Pick<Comic, "explore" | "qa">): boolean {
-  return comic.explore?.published !== false && (!comic.qa?.version || (comic.qa.final?.status === "accepted" && !comic.qa.final.open?.length));
+  return comic.explore?.published !== false && (!comic.qa?.version || !!comic.explore?.featured || (comic.qa.final?.status === "accepted" && !comic.qa.final.open?.length));
 }
 
 /** Every picture in a comic has a key: "cover", or "<page>-<panel>" counting from 1 (e.g. "3-2"). */
