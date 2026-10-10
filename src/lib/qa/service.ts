@@ -9,7 +9,7 @@ import { metered } from "../meter";
 import { castRefsFor, ledgerFor, objectRefsFor, qaReferences } from "../picture-context";
 import { loadComic, loadImage, loadQaFile, saveComic, saveQaFile, withComicLock } from "../storage";
 import { getStyle } from "../styles";
-import { comicRevision, exportReady, pageRevision, pictureRevisions } from "./state";
+import { comicRevision, exportReady, pageRevision, pictureRevisions, picturesAndPagesChecked } from "./state";
 import { checkSequence, contactSheet, sequenceBlockers, sequenceFacts, type QaReference, type SequenceVerdict } from "./visual-qa";
 
 const globalQa = globalThis as typeof globalThis & { qaFlights?: Map<string, Promise<unknown>> };
@@ -33,6 +33,8 @@ export function qaStatus(comic: Comic) {
   const pages = [...(comic.script?.cover ? ["cover"] : []), ...(comic.script?.pages.map((_, p) => String(p + 1)) ?? [])];
   return {
     required: comic.qa?.version === 1, revision, ready: exportReady(comic),
+    /** Every picture and page checked: the owner may feature it on Explore before the final read-through. */
+    featurable: picturesAndPagesChecked(comic),
     dependencies: Object.fromEntries(entries.filter(e => e.continuesFrom).map(e => [e.key, e.continuesFrom])),
     pictures: Object.fromEntries(Object.entries(comic.qa?.pictures ?? {}).map(([key, record]) => [key, { status: record.status, accepted: record.accepted?.revision === art[key], digest: record.accepted?.digest, attempts: record.attempts, notes: record.notes }])),
     pages: Object.fromEntries(pages.map(page => { const check = comic.qa?.pages?.[page]; return [page, check?.revision === pageRevision(comic, page) ? check : null]; })),

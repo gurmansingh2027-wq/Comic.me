@@ -374,7 +374,7 @@ function ComicDrawing({
         </div>}
       </section>}
 
-      {allReady && qa.ready && !qa.open.length && saveState === "saved" && <ShareToExplore comicId={comicId} initialPublished={initialPublished} />}
+      {allReady && !checking && saveState === "saved" && ((qa.ready && !qa.open.length) || qa.featurable) && <ShareToExplore comicId={comicId} initialPublished={initialPublished} feature={!(qa.ready && !qa.open.length)} />}
 
       {allReady && (
         <p className="text-center text-sm text-neutral-700">
@@ -419,7 +419,8 @@ function panelLabel(key: string) {
 }
 
 /** Every comic goes on Explore for now; the owner can hide it (and bring it back) any time. */
-function ShareToExplore({ comicId, initialPublished }: { comicId: string; initialPublished: boolean }) {
+/** `feature`: the whole-book read-through didn't finish, but every picture and page was checked, so the owner can still feature it. */
+function ShareToExplore({ comicId, initialPublished, feature = false }: { comicId: string; initialPublished: boolean; feature?: boolean }) {
   const [published, setPublished] = useState(initialPublished);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -430,7 +431,7 @@ function ShareToExplore({ comicId, initialPublished }: { comicId: string; initia
     const response = await fetch(`/api/comics/${comicId}/explore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ published: !published }),
+      body: JSON.stringify({ published: !published, featured: feature }),
     }).catch(() => null);
     const data = await response?.json().catch(() => ({}));
     if (response?.ok) setPublished(data.explore.published);
@@ -445,12 +446,14 @@ function ShareToExplore({ comicId, initialPublished }: { comicId: string; initia
         <p className="text-neutral-600">
           {published
             ? "Others see the finished art and can recreate its format with their own story. Never your story text, photos or character sheets."
-            : "Only you can see it. Put it back any time."}
+            : feature
+              ? "Every picture and page has been checked. The final read-through of the whole book didn't finish, but you can still put it on Explore."
+              : "Only you can see it. Put it back any time."}
         </p>
         {error && <p className="font-bold text-zap">{error}</p>}
       </div>
       <button type="button" onClick={toggle} disabled={busy} className="rounded border-2 border-ink bg-pop px-3 py-1.5 font-bold disabled:opacity-50">
-        {published ? "Hide from Explore" : "Put back on Explore"}
+        {published ? "Hide from Explore" : feature ? "Feature on Explore" : "Put back on Explore"}
       </button>
     </div>
   );

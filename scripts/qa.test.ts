@@ -164,3 +164,14 @@ test("the reader's requested change is part of what the inspector checks a redra
   await createDrawingService(h.deps).draw(h.comic.id, "1-1", { redraw: true, fresh: true, requestId: "r", expectedDigest: accepted.digest, feedback: "no waving, hands on the wheel" });
   assert.match(facts[0], /overrides the storyboard beat.*no waving/);
 });
+test("featuring on Explore needs every picture and page checked, but not the final read-through", async () => {
+  const { exploreReady, picturesAndPagesChecked } = await import("../src/lib/qa/state");
+  const h = harness(); await h.service.draw(h.comic.id, "1-1"); await h.service.draw(h.comic.id, "1-2");
+  const comic = structuredClone(h.comic);
+  comic.explore = { published: true, publishedAt: "", featured: true };
+  assert.equal(picturesAndPagesChecked(comic), false); assert.equal(exploreReady(comic), false);
+  comic.qa!.pages = { "1": { revision: pageRevision(comic, "1"), status: "accepted", findings: [], at: "" } };
+  assert.equal(exploreReady(comic), true); assert.equal(exportReady(comic), false);
+  comic.qa!.pages["1"].status = "blocked";
+  assert.equal(exploreReady(comic), false);
+});

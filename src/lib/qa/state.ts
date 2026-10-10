@@ -71,12 +71,23 @@ export function migrateQaRevisions(comic: Comic): Comic {
   return comic;
 }
 
+/** Every picture accepted for its current plan and every page checked (problems the redraws couldn't fix stay listed). */
+export function picturesAndPagesChecked(comic: Comic): boolean {
+  if (!comic.qa?.version) return true;
+  const revisions = pictureRevisions(comic);
+  return !!comic.script && imageKeys(comic.script).every(key => comic.qa?.pictures[key]?.accepted?.revision === revisions[key])
+    && [...(comic.script.cover ? ["cover"] : []), ...comic.script.pages.map((_, p) => String(p + 1))].every(page => comic.qa?.pages?.[page]?.status === "accepted" && comic.qa.pages[page].revision === pageRevision(comic, page, revisions));
+}
 export function exportReady(comic: Comic): boolean {
   if (!comic.qa?.version) return true;
   const revisions = pictureRevisions(comic);
   return !!comic.script && imageKeys(comic.script).every(key => comic.qa?.pictures[key]?.accepted?.revision === revisions[key])
     && [...(comic.script.cover ? ["cover"] : []), ...comic.script.pages.map((_, p) => String(p + 1))].every(page => comic.qa?.pages?.[page]?.status === "accepted" && comic.qa.pages[page].revision === pageRevision(comic, page, revisions))
     && comic.qa.final?.status === "accepted" && comic.qa.final.revision === comicRevision(comic);
+}
+/** On Explore: fully checked with nothing open, or featured by the owner after every picture and page was checked. */
+export function exploreReady(comic: Comic): boolean {
+  return (exportReady(comic) && !comic.qa?.final?.open?.length) || (!!comic.explore?.featured && picturesAndPagesChecked(comic));
 }
 export function invalidateComposition(comic: Comic): void {
   if (comic.qa) comic.qa.final = undefined;
